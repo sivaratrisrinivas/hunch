@@ -1,11 +1,40 @@
 # Hunch
 
-Hunch predicts one likely next Bash command from the three most recent commands
-in your local history. This first slice uses a command n-gram count model and a
-most-common-command baseline. It never executes a suggestion or sends history
-off the machine.
+Hunch learns command sequences from your Bash history. Given the three most
+recent usable commands, it prints one likely next command. Hunch does not run
+the command or send history over the network.
 
-## Install and run
+## What it does
+
+The current version has two commands.
+
+- `hunch train` reads Bash history, filters sensitive commands, evaluates two
+  count-based predictors, and saves a command n-gram model.
+- `hunch predict` uses the latest three usable history entries and prints at
+  most one suggestion. It writes errors to standard error, so standard output
+  contains only the suggestion or nothing.
+
+Training treats each nonblank, non-timestamp physical history line as one
+command. It preserves command order and splits the commands at the 80 percent
+and 90 percent positions. The oldest portion trains the predictors. The next
+portion is validation data, and the newest portion is test data.
+
+Hunch reports exact-command accuracy for a most-common-command predictor and a
+command n-gram predictor. The n-gram predictor first looks for the full
+three-command context. If it has not seen that context, it tries two commands,
+then one command, then the most common training command.
+
+## Why this version uses counts
+
+The count model tests the complete local workflow before Hunch adds a language
+model. It establishes how Hunch reads and filters history, separates later
+commands from training data, stores private state, handles failures, and prints
+a suggestion for Bash to consume.
+
+The two predictors provide comparison results for later models. Hunch will
+evaluate the transformer with the same held-out exact-command accuracy metric.
+
+## How to install and run it
 
 Install Hunch in an isolated environment with
 [`uv`](https://docs.astral.sh/uv/):
@@ -16,29 +45,39 @@ hunch train
 hunch predict
 ```
 
-`hunch train` reads `$HISTFILE`, falling back to `~/.bash_history`. It ignores
-blank lines and Bash timestamp markers, filters common secret-looking commands,
-keeps the remaining commands chronological, and reports both baselines on the
-validation and test portions. It does not save a cleaned copy of history.
+By default, Hunch reads `$HISTFILE`. If that variable is unset, it reads
+`~/.bash_history`.
 
-The model is stored under `$XDG_DATA_HOME/hunch` (normally
-`~/.local/share/hunch`) with private permissions. Tests and controlled
-environments can override the inputs with `HUNCH_HISTORY_PATH` and
-`HUNCH_STATE_DIR`.
+`hunch train` prints the number of usable and filtered commands, split sizes,
+and validation and test accuracy. It replaces the saved model only after it has
+read enough usable history and built a new model. A missing, empty, or short
+history file leaves the previous model unchanged.
 
-`hunch predict` prints either one exact command or nothing; diagnostics go to
-standard error. Inspect the suggestion before running it.
+`hunch predict` reads history again, so its command context includes entries
+saved after training. Inspect its output before you run it.
 
-## History privacy
+## How it handles private data
 
-The built-in sensitive-command filter is a precaution, not a guarantee. Bash
-itself can keep especially sensitive commands out of history: with
-`HISTCONTROL=ignorespace` or `HISTCONTROL=ignoreboth`, prefix a command with a
-space. Hunch cannot learn commands Bash did not save.
+Hunch filters common password, token, private-key, authorization-header, and URL
+credential patterns before it builds training examples. It does not write a
+cleaned history file.
 
-The count-model state contains command text and must be treated as private.
+The filter cannot detect every secret. Configure Bash with
+`HISTCONTROL=ignorespace` or `HISTCONTROL=ignoreboth`, then prefix a sensitive
+command with a space to keep it out of future history. Hunch cannot read a
+command that Bash did not save.
 
-## Development
+The saved count model contains command text. Hunch writes it to
+`$XDG_DATA_HOME/hunch/count-model.json`, or
+`~/.local/share/hunch/count-model.json` when `$XDG_DATA_HOME` is unset. The
+directory uses mode `0700`, and the file uses mode `0600`. Hunch writes a
+temporary file in the same private directory and atomically replaces the old
+model after the write succeeds.
+
+Tests and controlled environments can set `HUNCH_HISTORY_PATH` and
+`HUNCH_STATE_DIR` to redirect both input and state.
+
+## How to test it
 
 ```bash
 uv sync
