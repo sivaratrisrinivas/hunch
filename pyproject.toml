@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hunch"
+version = "0.1.0"
+description = "Predict the next Bash command from local command history"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+hunch = "hunch.cli:main"
+
+[dependency-groups]
+dev = ["mypy>=1.14", "pytest>=8.3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hunch"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
