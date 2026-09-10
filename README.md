@@ -4,6 +4,27 @@ Hunch learns command sequences from your Bash history. Given the three most
 recent usable commands, it prints one likely next command. Hunch does not run
 the command or send history over the network.
 
+## What
+
+Hunch now trains a byte-level decoder-only transformer and keeps the count
+predictors as fixed baselines. `hunch train` reports both kinds of prediction
+on validation and test data. `hunch predict` loads the transformer checkpoint
+and prints one complete suggestion or nothing.
+
+## Why
+
+The count predictors are useful reference points, but they cannot generalize
+within a command or to a command they have not seen. The transformer learns
+the next UTF-8 byte from three earlier commands, so its metrics show whether
+the extra model capacity helps on held-out history.
+
+## How
+
+Training filters sensitive history entries, splits the remaining commands in
+time order, trains from random weights, and keeps the epoch with the lowest
+validation loss. It then evaluates that checkpoint on the untouched test
+portion and saves it atomically in the private state directory.
+
 ## Install and run
 
 Install Hunch in an isolated environment with
@@ -19,9 +40,9 @@ By default, Hunch reads `$HISTFILE`. If that variable is unset, it reads
 `~/.bash_history`.
 
 Use `--device cpu` to force CPU training. The default `--device auto` uses CUDA
-only when PyTorch reports a usable CUDA device. Use `--tiny` with `--device
-cpu` for a short deterministic smoke run. `--epochs`, `--batch-size`, and
-`--seed` are also available for controlled runs. Epochs are limited to 20.
+only when PyTorch reports a usable CUDA device. `--tiny` selects a small CPU
+profile by default. `--epochs`, `--batch-size`, and `--seed` are also
+available for controlled runs. Epochs are limited to 20.
 
 `hunch predict` reads history again, so its command context includes entries
 saved after training. It prints one complete suggestion or nothing. Inspect
@@ -60,7 +81,8 @@ The model receives each token and predicts the next token. Loss labels for the
 context are `-100`, which PyTorch ignores. The first target byte is therefore
 predicted from the final context boundary. The target boundary is included in
 the loss so the model learns when to stop. The model uses a 256-token causal
-window and keeps the newest tokens when a serialized example is longer.
+window. Long targets are split across windows so every target byte receives a
+loss.
 
 The default model has four decoder blocks, four attention heads, 128-wide
 embeddings, 512-wide feed-forward layers, learned positions, tied input and

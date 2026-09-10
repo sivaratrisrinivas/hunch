@@ -179,6 +179,14 @@ class ByteTokenizer:
         return tokens
 
     def encode_example(self, example: Example, block_size: int) -> EncodedExample:
+        windows = self.encode_windows(example, block_size)
+        if len(windows) != 1:
+            raise ValueError("example requires multiple context windows")
+        return windows[0]
+
+    def encode_windows(
+        self, example: Example, block_size: int
+    ) -> list[EncodedExample]:
         if block_size <= 0:
             raise ValueError("block_size must be positive")
         if len(example.context) != COMMAND_CONTEXT_SIZE:
@@ -187,19 +195,29 @@ class ByteTokenizer:
         target_tokens = self.encode_command(example.target)
         serialized = context_tokens + target_tokens + [self.boundary_token]
 
-        maximum_serialized_length = block_size + 1
-        crop_start = max(0, len(serialized) - maximum_serialized_length)
-        cropped = serialized[crop_start:]
-        input_ids = tuple(cropped[:-1])
         target_start = len(context_tokens)
-        labels = tuple(
-            token if crop_start + index + 1 >= target_start else IGNORE_INDEX
-            for index, token in enumerate(cropped[1:])
-        )
-        represented_target_start = max(target_start, crop_start)
         target_end = target_start + len(target_tokens)
-        target_byte_count = max(0, target_end - represented_target_start)
-        return EncodedExample(input_ids, labels, target_byte_count)
+        windows: list[EncodedExample] = []
+        for chunk_start in range(target_start, target_end + 1, block_size):
+            chunk_end = min(chunk_start + block_size - 1, target_end)
+            window_start = max(0, chunk_end - block_size)
+            window = serialized[window_start : chunk_end + 1]
+            labels = tuple(
+                token
+                if chunk_start <= window_start + index + 1 <= chunk_end
+                else IGNORE_INDEX
+                for index, token in enumerate(window[1:])
+            )
+            target_byte_count = max(
+                0,
+                min(chunk_end, target_end - 1)
+                - max(chunk_start, target_start)
+                + 1,
+            )
+            windows.append(
+                EncodedExample(tuple(window[:-1]), labels, target_byte_count)
+            )
+        return windows
 
     def decode_bytes(self, values: Sequence[int]) -> str | None:
         try:
@@ -385,7 +403,10 @@ def train_transformer(
         model.train()
         indexes = torch.randperm(len(train_examples), generator=generator).tolist()
         for start in range(0, len(indexes), config.batch_size):
-            batch_examples = [train_examples[index] for index in indexes[start:]]
+            batch_examples = [
+                train_examples[index]
+                for index in indexes[start : start + config.batch_size]
+            ]
             input_ids, labels = _tensor_batch(
                 batch_examples, model.tokenizer, config.model.block_size, device
             )
@@ -452,7 +473,11 @@ def _tensor_batch(
     block_size: int,
     device: torch.device,
 ) -> tuple[Tensor, Tensor]:
-    encoded = [tokenizer.encode_example(example, block_size) for example in examples]
+    encoded = [
+        window
+        for example in examples
+        for window in tokenizer.encode_windows(example, block_size)
+    ]
     width = max(len(item.input_ids) for item in encoded)
     input_ids = torch.full(
         (len(encoded), width), tokenizer.padding_token, dtype=torch.long, device=device
@@ -514,8 +539,11 @@ def _byte_loss_totals(
     for start in range(0, len(examples), batch_size):
         batch = examples[start : start + batch_size]
         encoded = [
-            model.tokenizer.encode_example(example, model.config.block_size)
+            window
             for example in batch
+            for window in model.tokenizer.encode_windows(
+                example, model.config.block_size
+            )
         ]
         input_ids, labels = _tensor_batch(
             batch, model.tokenizer, model.config.block_size, device

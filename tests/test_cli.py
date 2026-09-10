@@ -8,11 +8,17 @@ import sys
 
 import pytest
 
+from hunch.cli import _valid_suggestion
+
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
 
-def run_hunch(home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+def run_hunch(
+    home: Path,
+    *arguments: str,
+    cuda_visible_devices: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment.update(
         HOME=str(home),
@@ -21,6 +27,8 @@ def run_hunch(home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
         HUNCH_STATE_DIR=str(home / ".local" / "share" / "hunch"),
         XDG_DATA_HOME=str(home / ".local" / "share"),
     )
+    if cuda_visible_devices is not None:
+        environment["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
     return subprocess.run(
         [str(Path(sys.executable).with_name("hunch")), *arguments],
         cwd=PROJECT_ROOT,
@@ -50,10 +58,19 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     commands = patterned_history()
     write_history(home, ["#1700000000", "", *commands])
 
-    trained = run_hunch(home, "train", "--tiny", "--device", "cpu")
+    trained = run_hunch(
+        home,
+        "train",
+        "--tiny",
+        "--device",
+        "cuda",
+        cuda_visible_devices="",
+    )
 
     assert trained.returncode == 0, trained.stderr
+    assert trained.stderr == ""
     assert "split: train=38 validation=5 test=5" in trained.stdout
+    assert "device: cpu" in trained.stdout
     assert "validation most-common exact-command accuracy:" in trained.stdout
     assert "validation command-ngram exact-command accuracy:" in trained.stdout
     assert "test most-common exact-command accuracy:" in trained.stdout
@@ -72,13 +89,12 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     write_history(home, [*commands, "git status", "git add .", "git commit"])
     predicted = run_hunch(home, "predict")
     assert predicted.returncode == 0, predicted.stderr
+    assert predicted.stderr == ""
     assert predicted.stdout.count("\n") <= 1
 
 
 def test_sensitive_commands_are_filtered_before_training(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    commands = patterned_history(15)
-    commands[8:8] = [
+    sensitive_commands = [
         "export API_TOKEN=super-secret-value",
         "curl -H 'Authorization: Bearer abc123' https://example.test",
         "ssh -i ~/.ssh/id_rsa server",
@@ -88,35 +104,55 @@ def test_sensitive_commands_are_filtered_before_training(tmp_path: Path) -> None
         "API-KEY=hunter2 deploy",
         "token:hunter2 command",
     ]
-    write_history(home, commands)
+    alternate_sensitive_commands = [
+        "export API_TOKEN=another-secret-value",
+        "curl -H 'Authorization: Bearer xyz789' https://example.test",
+        "ssh -i ~/.ssh/id_rsa server",
+        "https://admin:different-password@example.test/private",
+        "PGPASSWORD=different-password psql",
+        "export AWS_SECRET_ACCESS_KEY=different-secret",
+        "API-KEY=different-key deploy",
+        "token:different-token command",
+    ]
+    histories: list[list[str]] = []
+    for replacement in (sensitive_commands, alternate_sensitive_commands):
+        commands = patterned_history(15)
+        commands[8:8] = replacement
+        histories.append(commands)
 
-    result = run_hunch(home, "train", "--tiny", "--device", "cpu")
+    checkpoints: list[bytes] = []
+    results: list[subprocess.CompletedProcess[str]] = []
+    for index, history in enumerate(histories):
+        home = tmp_path / f"home-{index}"
+        write_history(home, history)
+        result = run_hunch(home, "train", "--tiny", "--device", "cpu")
+        results.append(result)
+        checkpoints.append((home / ".local/share/hunch/transformer.pt").read_bytes())
 
-    assert result.returncode == 0, result.stderr
-    model_text = (home / ".local/share/hunch/transformer.pt").read_bytes()
-    assert b"super-secret-value" not in model_text
-    assert b"Authorization" not in model_text
-    assert b"id_rsa" not in model_text
-    assert b"hunter2" not in model_text
-    assert b"PGPASSWORD" not in model_text
-    assert b"AWS_SECRET_ACCESS_KEY" not in model_text
-    assert b"API-KEY" not in model_text
-    assert b"token:hunter2" not in model_text
-    assert "filtered sensitive commands: 8" in result.stdout
+    assert all(result.returncode == 0 for result in results)
+    assert all(result.stderr == "" for result in results)
+    assert all("filtered sensitive commands: 8" in result.stdout for result in results)
+    assert checkpoints[0] == checkpoints[1]
 
 
 def test_chronological_split_does_not_train_on_later_commands(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    early = ["old"] * 40
-    late = ["future-validation"] * 5 + ["future-test"] * 5
-    write_history(home, early + late)
+    prefix = [f"early-{index}" for index in range(8)]
+    histories = [
+        prefix + ["validation-a", "test-a"],
+        prefix + ["validation-b", "test-b"],
+    ]
+    checkpoints: list[bytes] = []
+    for index, history in enumerate(histories):
+        home = tmp_path / f"home-{index}"
+        write_history(home, history)
+        result = run_hunch(
+            home, "train", "--tiny", "--epochs", "1", "--device", "cpu"
+        )
 
-    result = run_hunch(home, "train", "--tiny", "--device", "cpu")
+        assert result.returncode == 0, result.stderr
+        checkpoints.append((home / ".local/share/hunch/transformer.pt").read_bytes())
 
-    assert result.returncode == 0, result.stderr
-    model = (home / ".local/share/hunch/transformer.pt").read_bytes()
-    assert b"future-validation" not in model
-    assert b"future-test" not in model
+    assert checkpoints[0] == checkpoints[1]
 
 
 def test_ngram_backoff_and_most_common_baselines_have_known_results(
@@ -130,6 +166,7 @@ def test_ngram_backoff_and_most_common_baselines_have_known_results(
     result = run_hunch(home, "train", "--tiny", "--device", "cpu")
 
     assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
     assert "test most-common exact-command accuracy: 20.00% (1/5)" in result.stdout
     assert "test command-ngram exact-command accuracy: 80.00% (4/5)" in result.stdout
 
@@ -192,6 +229,7 @@ def test_predict_failure_is_clear_and_prints_no_suggestion(tmp_path: Path) -> No
 def test_predict_rejects_a_control_character_suggestion(tmp_path: Path) -> None:
     home = tmp_path / "home"
     unsafe_suggestion = "echo unsafe\u0085text"
+    assert not _valid_suggestion(unsafe_suggestion)
     cycle = ["one", "two", "three", unsafe_suggestion] * 12
     write_history(home, cycle)
     trained = run_hunch(home, "train", "--tiny", "--device", "cpu")

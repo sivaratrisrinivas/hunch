@@ -68,8 +68,6 @@ def train(options: argparse.Namespace) -> int:
     test_transformer = evaluate_transformer(
         fit.model, split.test, batch_size=training_config.batch_size
     )
-    save_model(fit.model, state_directory())
-
     print(f"usable commands: {len(prepared.commands)}")
     print(f"filtered sensitive commands: {prepared.sensitive_count}")
     print(
@@ -85,6 +83,7 @@ def train(options: argparse.Namespace) -> int:
     _print_accuracy("validation command-ngram", validation_ngram)
     _print_accuracy("test most-common", test_common)
     _print_accuracy("test command-ngram", test_ngram)
+    save_model(fit.model, state_directory())
     return 0
 
 
@@ -134,7 +133,7 @@ def _training_config(options: argparse.Namespace) -> TrainingConfig:
         seed=options.seed if options.seed is not None else defaults.seed,
         learning_rate=defaults.learning_rate,
         weight_decay=defaults.weight_decay,
-        device=options.device,
+        device=options.device if options.device is not None else defaults.device,
     )
 
 
@@ -151,7 +150,7 @@ def parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--batch-size", type=int, default=None)
     train_parser.add_argument("--seed", type=int, default=None)
     train_parser.add_argument(
-        "--device", choices=("auto", "cpu", "cuda"), default="auto"
+        "--device", choices=("auto", "cpu", "cuda"), default=None
     )
     subcommands.add_parser("predict", help="print one predicted command")
     return command_parser
