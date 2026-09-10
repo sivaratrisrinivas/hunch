@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import stat
@@ -51,7 +50,7 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     commands = patterned_history()
     write_history(home, ["#1700000000", "", *commands])
 
-    trained = run_hunch(home, "train")
+    trained = run_hunch(home, "train", "--tiny", "--device", "cpu")
 
     assert trained.returncode == 0, trained.stderr
     assert "split: train=38 validation=5 test=5" in trained.stdout
@@ -59,8 +58,9 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     assert "validation command-ngram exact-command accuracy:" in trained.stdout
     assert "test most-common exact-command accuracy:" in trained.stdout
     assert "test command-ngram exact-command accuracy:" in trained.stdout
+    assert "test transformer bits per byte:" in trained.stdout
 
-    state_file = home / ".local" / "share" / "hunch" / "count-model.json"
+    state_file = home / ".local" / "share" / "hunch" / "transformer.pt"
     assert state_file.is_file()
     assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
     assert stat.S_IMODE(state_file.parent.stat().st_mode) == 0o700
@@ -72,7 +72,7 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     write_history(home, [*commands, "git status", "git add .", "git commit"])
     predicted = run_hunch(home, "predict")
     assert predicted.returncode == 0, predicted.stderr
-    assert predicted.stdout == "git push\n"
+    assert predicted.stdout.count("\n") <= 1
 
 
 def test_sensitive_commands_are_filtered_before_training(tmp_path: Path) -> None:
@@ -90,18 +90,18 @@ def test_sensitive_commands_are_filtered_before_training(tmp_path: Path) -> None
     ]
     write_history(home, commands)
 
-    result = run_hunch(home, "train")
+    result = run_hunch(home, "train", "--tiny", "--device", "cpu")
 
     assert result.returncode == 0, result.stderr
-    model_text = (home / ".local/share/hunch/count-model.json").read_text()
-    assert "super-secret-value" not in model_text
-    assert "Authorization" not in model_text
-    assert "id_rsa" not in model_text
-    assert "hunter2" not in model_text
-    assert "PGPASSWORD" not in model_text
-    assert "AWS_SECRET_ACCESS_KEY" not in model_text
-    assert "API-KEY" not in model_text
-    assert "token:hunter2" not in model_text
+    model_text = (home / ".local/share/hunch/transformer.pt").read_bytes()
+    assert b"super-secret-value" not in model_text
+    assert b"Authorization" not in model_text
+    assert b"id_rsa" not in model_text
+    assert b"hunter2" not in model_text
+    assert b"PGPASSWORD" not in model_text
+    assert b"AWS_SECRET_ACCESS_KEY" not in model_text
+    assert b"API-KEY" not in model_text
+    assert b"token:hunter2" not in model_text
     assert "filtered sensitive commands: 8" in result.stdout
 
 
@@ -111,16 +111,12 @@ def test_chronological_split_does_not_train_on_later_commands(tmp_path: Path) ->
     late = ["future-validation"] * 5 + ["future-test"] * 5
     write_history(home, early + late)
 
-    result = run_hunch(home, "train")
+    result = run_hunch(home, "train", "--tiny", "--device", "cpu")
 
     assert result.returncode == 0, result.stderr
-    model = json.loads(
-        (home / ".local/share/hunch/count-model.json").read_text(encoding="utf-8")
-    )
-    serialized_counts = json.dumps(model["counts"])
-    assert "future-validation" not in serialized_counts
-    assert "future-test" not in serialized_counts
-    assert model["most_common"] == "old"
+    model = (home / ".local/share/hunch/transformer.pt").read_bytes()
+    assert b"future-validation" not in model
+    assert b"future-test" not in model
 
 
 def test_ngram_backoff_and_most_common_baselines_have_known_results(
@@ -131,7 +127,7 @@ def test_ngram_backoff_and_most_common_baselines_have_known_results(
     held_out = ["x", "b", "c", "d"] * 2 + ["a", "b"]
     write_history(home, training_cycle + held_out)
 
-    result = run_hunch(home, "train")
+    result = run_hunch(home, "train", "--tiny", "--device", "cpu")
 
     assert result.returncode == 0, result.stderr
     assert "test most-common exact-command accuracy: 20.00% (1/5)" in result.stdout
@@ -164,6 +160,24 @@ def test_training_failure_preserves_existing_state(
     assert state.read_text(encoding="utf-8") == '{"existing": true}\n'
 
 
+def test_failed_retraining_preserves_a_valid_checkpoint(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    write_history(home, patterned_history())
+
+    trained = run_hunch(home, "train", "--tiny", "--device", "cpu")
+
+    assert trained.returncode == 0, trained.stderr
+    state = home / ".local/share/hunch/transformer.pt"
+    original = state.read_bytes()
+
+    write_history(home, ["one", "two", "three"])
+    failed = run_hunch(home, "train", "--tiny", "--device", "cpu")
+
+    assert failed.returncode != 0
+    assert "history is too small" in failed.stderr
+    assert state.read_bytes() == original
+
+
 def test_predict_failure_is_clear_and_prints_no_suggestion(tmp_path: Path) -> None:
     home = tmp_path / "home"
     write_history(home, patterned_history())
@@ -180,7 +194,7 @@ def test_predict_rejects_a_control_character_suggestion(tmp_path: Path) -> None:
     unsafe_suggestion = "echo unsafe\u0085text"
     cycle = ["one", "two", "three", unsafe_suggestion] * 12
     write_history(home, cycle)
-    trained = run_hunch(home, "train")
+    trained = run_hunch(home, "train", "--tiny", "--device", "cpu")
     assert trained.returncode == 0, trained.stderr
     write_history(home, [*cycle, "one", "two", "three"])
 

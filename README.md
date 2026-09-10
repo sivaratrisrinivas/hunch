@@ -4,37 +4,7 @@ Hunch learns command sequences from your Bash history. Given the three most
 recent usable commands, it prints one likely next command. Hunch does not run
 the command or send history over the network.
 
-## What it does
-
-The current version has two commands.
-
-- `hunch train` reads Bash history, filters sensitive commands, evaluates two
-  count-based predictors, and saves a command n-gram model.
-- `hunch predict` uses the latest three usable history entries and prints at
-  most one suggestion. It writes errors to standard error, so standard output
-  contains only the suggestion or nothing.
-
-Training treats each nonblank, non-timestamp physical history line as one
-command. It preserves command order and splits the commands at the 80 percent
-and 90 percent positions. The oldest portion trains the predictors. The next
-portion is validation data, and the newest portion is test data.
-
-Hunch reports exact-command accuracy for a most-common-command predictor and a
-command n-gram predictor. The n-gram predictor first looks for the full
-three-command context. If it has not seen that context, it tries two commands,
-then one command, then the most common training command.
-
-## Why this version uses counts
-
-The count model tests the complete local workflow before Hunch adds a language
-model. It establishes how Hunch reads and filters history, separates later
-commands from training data, stores private state, handles failures, and prints
-a suggestion for Bash to consume.
-
-The two predictors provide comparison results for later models. Hunch will
-evaluate the transformer with the same held-out exact-command accuracy metric.
-
-## How to install and run it
+## Install and run
 
 Install Hunch in an isolated environment with
 [`uv`](https://docs.astral.sh/uv/):
@@ -48,36 +18,94 @@ hunch predict
 By default, Hunch reads `$HISTFILE`. If that variable is unset, it reads
 `~/.bash_history`.
 
-`hunch train` prints the number of usable and filtered commands, split sizes,
-and validation and test accuracy. It replaces the saved model only after it has
-read enough usable history and built a new model. A missing, empty, or short
-history file leaves the previous model unchanged.
+Use `--device cpu` to force CPU training. The default `--device auto` uses CUDA
+only when PyTorch reports a usable CUDA device. Use `--tiny` with `--device
+cpu` for a short deterministic smoke run. `--epochs`, `--batch-size`, and
+`--seed` are also available for controlled runs. Epochs are limited to 20.
 
 `hunch predict` reads history again, so its command context includes entries
-saved after training. Inspect its output before you run it.
+saved after training. It prints one complete suggestion or nothing. Inspect
+the suggestion before you run it.
 
-## How it handles private data
+## Training data
 
-Hunch filters common password, token, private-key, authorization-header, and URL
-credential patterns before it builds training examples. It does not write a
-cleaned history file.
+Hunch treats each nonblank, non-timestamp physical history line as one
+command. It filters common password, token, private-key, authorization-header,
+and URL-credential patterns before building examples. It preserves the
+remaining command order and does not write a cleaned history file.
 
-The filter cannot detect every secret. Configure Bash with
-`HISTCONTROL=ignorespace` or `HISTCONTROL=ignoreboth`, then prefix a sensitive
-command with a space to keep it out of future history. Hunch cannot read a
-command that Bash did not save.
+The chronological split uses the oldest 80 percent for training, the next 10
+percent for validation, and the newest 10 percent for the untouched test. Each
+target uses the three commands immediately before it. Context commands may
+cross a split boundary because they were already present when the target ran.
+Validation chooses the checkpoint. The test portion is evaluated after that
+choice and does not affect training.
 
-The saved count model contains command text. Hunch writes it to
-`$XDG_DATA_HOME/hunch/count-model.json`, or
-`~/.local/share/hunch/count-model.json` when `$XDG_DATA_HOME` is unset. The
-directory uses mode `0700`, and the file uses mode `0600`. Hunch writes a
-temporary file in the same private directory and atomically replaces the old
-model after the write succeeds.
+## Byte-level transformer
+
+The transformer maps each UTF-8 byte directly to token IDs 0 through 255. It
+uses token 256 as a command boundary and token 257 for padding. It needs no
+unknown, beginning-of-sequence, or subword token.
+
+For three context commands and a target command, the token stream is:
+
+```text
+bytes(command 1), boundary,
+bytes(command 2), boundary,
+bytes(command 3), boundary,
+bytes(target), boundary
+```
+
+The model receives each token and predicts the next token. Loss labels for the
+context are `-100`, which PyTorch ignores. The first target byte is therefore
+predicted from the final context boundary. The target boundary is included in
+the loss so the model learns when to stop. The model uses a 256-token causal
+window and keeps the newest tokens when a serialized example is longer.
+
+The default model has four decoder blocks, four attention heads, 128-wide
+embeddings, 512-wide feed-forward layers, learned positions, tied input and
+output embeddings, LayerNorm, residual connections, and 0.1 dropout. The
+implementation uses ordinary PyTorch tensor operations for causal attention.
+
+Training uses a fixed seed and AdamW for at most 20 epochs. It keeps the model
+state with the lowest validation loss in memory. It evaluates exact-command
+accuracy with greedy generation. It reports bits per byte from target-byte
+cross-entropy. The terminating boundary is excluded from that metric's
+numerator and denominator.
+
+The most-common and command-ngram predictors remain fixed count baselines.
+They are fitted only on the training commands and are reported beside the
+transformer on validation and test data. They are not saved as production
+state.
+
+## Private state and failures
+
+The transformer checkpoint is stored at
+`$XDG_DATA_HOME/hunch/transformer.pt`, or
+`~/.local/share/hunch/transformer.pt` when `$XDG_DATA_HOME` is unset. The
+checkpoint contains the model configuration, tokenizer metadata, and CPU
+weights in one file. The directory uses mode `0700`, and the checkpoint uses
+mode `0600`.
+
+Hunch writes a unique temporary checkpoint in the same private directory,
+flushes and syncs it, validates it through the normal loader, and atomically
+replaces the old checkpoint. Training does not publish until validation and
+test evaluation succeed. A failed or interrupted run therefore leaves the
+previous checkpoint unchanged.
+
+Hunch loads checkpoints onto the CPU first and validates their version,
+architecture, tokenizer metadata, configuration, and state dictionary. An
+unreadable or legacy count-model state produces a clear error and never falls
+back to random weights.
+
+Configure Bash with `HISTCONTROL=ignorespace` or `HISTCONTROL=ignoreboth`, then
+prefix a sensitive command with a space to keep it out of future history.
+Hunch cannot read a command that Bash did not save.
 
 Tests and controlled environments can set `HUNCH_HISTORY_PATH` and
-`HUNCH_STATE_DIR` to redirect both input and state.
+`HUNCH_STATE_DIR` to redirect input and state.
 
-## How to test it
+## Development
 
 ```bash
 uv sync

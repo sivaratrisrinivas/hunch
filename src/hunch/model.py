@@ -97,6 +97,10 @@ def evaluate_model(model: CountModel, examples: Sequence[Example]) -> Accuracy:
     return evaluate((model.predict(example.context) for example in examples), examples)
 
 
+def examples_from_commands(commands: Sequence[str]) -> list[Example]:
+    return _examples(commands, MAX_ORDER, len(commands))
+
+
 def _stable_winner(counts: Mapping[str, int]) -> str:
     first_seen = {command: index for index, command in enumerate(counts)}
     return max(counts, key=lambda command: (counts[command], -first_seen[command]))

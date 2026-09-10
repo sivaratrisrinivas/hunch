@@ -1,94 +1,156 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from typing import Any
+import pickle
+import tempfile
+from typing import Mapping
 
-from hunch.model import CountModel, MAX_ORDER
+import torch
+
+from hunch.transformer import (
+    ARCHITECTURE_VERSION,
+    ByteDecoderTransformer,
+    ModelConfig,
+    TOKENIZER_VERSION,
+)
 
 
 STATE_VERSION = 1
-STATE_FILENAME = "count-model.json"
+STATE_FILENAME = "transformer.pt"
 
 
 class StateError(Exception):
-    """Raised when count-model state is missing or invalid."""
+    """Raised when transformer state is missing, invalid, or cannot be saved."""
 
 
-def save_model(model: CountModel, state_directory: Path) -> Path:
+def save_model(model: ByteDecoderTransformer, state_directory: Path) -> Path:
+    """Publish one complete, private transformer checkpoint atomically."""
     try:
         state_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         state_directory.chmod(0o700)
     except OSError as error:
         raise StateError(f"cannot prepare private state directory: {error}") from error
 
-    path = state_directory / STATE_FILENAME
-    temporary_path = state_directory / f".{STATE_FILENAME}.tmp"
-    payload = {
-        "version": STATE_VERSION,
-        "order": MAX_ORDER,
-        "most_common": model.most_common,
-        "counts": {
-            str(order): [
-                {"context": list(context), "targets": target_counts}
-                for context, target_counts in contexts.items()
-            ]
-            for order, contexts in model.counts.items()
+    destination = state_directory / STATE_FILENAME
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{STATE_FILENAME}.", suffix=".tmp", dir=state_directory
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        os.chmod(temporary_path, 0o600)
+        payload = _checkpoint_payload(model)
+        with temporary_path.open("wb") as checkpoint:
+            torch.save(payload, checkpoint)
+            checkpoint.flush()
+            os.fsync(checkpoint.fileno())
+        _load_checkpoint_path(temporary_path, torch.device("cpu"))
+        os.replace(temporary_path, destination)
+        temporary_path = None
+        _best_effort_sync_directory(state_directory)
+        return destination
+    except (
+        OSError,
+        pickle.PicklingError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        KeyError,
+    ) as error:
+        raise StateError(f"cannot save transformer state: {error}") from error
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def load_model(
+    state_directory: Path, device: torch.device | None = None
+) -> ByteDecoderTransformer:
+    destination = state_directory / STATE_FILENAME
+    if not destination.is_file():
+        raise StateError(
+            f"model state does not exist: {destination}; run 'hunch train' first"
+        )
+    try:
+        return _load_checkpoint_path(destination, device or torch.device("cpu"))
+    except (
+        OSError,
+        EOFError,
+        IndexError,
+        KeyError,
+        pickle.UnpicklingError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise StateError(
+            f"model state is unreadable: {destination}: {error}"
+        ) from error
+
+
+def _checkpoint_payload(model: ByteDecoderTransformer) -> dict[str, object]:
+    return {
+        "format_version": STATE_VERSION,
+        "architecture": ARCHITECTURE_VERSION,
+        "tokenizer": {
+            "version": TOKENIZER_VERSION,
+            "byte_ids": "identity-0-255",
+            "command_boundary_id": model.tokenizer.boundary_token,
+            "padding_id": model.tokenizer.padding_token,
+        },
+        "model_config": model.config.as_dict(),
+        "state_dict": {
+            name: value.detach().cpu().clone()
+            for name, value in model.state_dict().items()
         },
     }
+
+
+def _load_checkpoint_path(path: Path, device: torch.device) -> ByteDecoderTransformer:
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(payload, dict):
+        raise ValueError("checkpoint must contain a mapping")
+    if payload.get("format_version") != STATE_VERSION:
+        raise ValueError("unsupported checkpoint version")
+    if payload.get("architecture") != ARCHITECTURE_VERSION:
+        raise ValueError("unsupported checkpoint architecture")
+
+    tokenizer = payload.get("tokenizer")
+    if not isinstance(tokenizer, dict) or tokenizer != {
+        "version": TOKENIZER_VERSION,
+        "byte_ids": "identity-0-255",
+        "command_boundary_id": 256,
+        "padding_id": 257,
+    }:
+        raise ValueError("invalid tokenizer metadata")
+
+    raw_config = payload.get("model_config")
+    if not isinstance(raw_config, Mapping):
+        raise ValueError("invalid model configuration")
+    config = ModelConfig.from_mapping(raw_config)
+    raw_state = payload.get("state_dict")
+    if not isinstance(raw_state, Mapping) or not all(
+        isinstance(name, str) and isinstance(value, torch.Tensor)
+        for name, value in raw_state.items()
+    ):
+        raise ValueError("invalid model state dictionary")
+
+    model = ByteDecoderTransformer(config)
+    model.load_state_dict(dict(raw_state), strict=True)
+    return model.to(device)
+
+
+def _best_effort_sync_directory(state_directory: Path) -> None:
     try:
-        with temporary_path.open("w", encoding="utf-8") as state_file:
-            os.chmod(temporary_path, 0o600)
-            json.dump(payload, state_file, ensure_ascii=False, separators=(",", ":"))
-            state_file.write("\n")
-            state_file.flush()
-            os.fsync(state_file.fileno())
-        temporary_path.replace(path)
-    except (OSError, TypeError) as error:
+        descriptor = os.open(state_directory, os.O_RDONLY)
         try:
-            temporary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise StateError(f"cannot save model state: {error}") from error
-    return path
-
-
-def load_model(state_directory: Path) -> CountModel:
-    path = state_directory / STATE_FILENAME
-    if not path.is_file():
-        raise StateError(f"model state does not exist: {path}; run 'hunch train' first")
-    try:
-        payload: Any = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("version") != STATE_VERSION:
-            raise ValueError("unsupported state version")
-        most_common = payload["most_common"]
-        serialized_counts = payload["counts"]
-        if not isinstance(most_common, str) or not isinstance(serialized_counts, dict):
-            raise ValueError("invalid state fields")
-        counts: dict[int, dict[tuple[str, ...], dict[str, int]]] = {}
-        for order in range(1, MAX_ORDER + 1):
-            entries = serialized_counts[str(order)]
-            contexts: dict[tuple[str, ...], dict[str, int]] = {}
-            for entry in entries:
-                context = tuple(_string_list(entry["context"]))
-                targets = entry["targets"]
-                if len(context) != order or not isinstance(targets, dict):
-                    raise ValueError("invalid count entry")
-                contexts[context] = {
-                    target: count
-                    for target, count in targets.items()
-                    if isinstance(target, str) and isinstance(count, int) and count > 0
-                }
-                if not contexts[context]:
-                    raise ValueError("empty target counts")
-            counts[order] = contexts
-        return CountModel(most_common, counts)
-    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-        raise StateError(f"model state is unreadable: {path}: {error}") from error
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("expected a list of commands")
-    return value
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        pass
