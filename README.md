@@ -7,7 +7,7 @@ the command or send history over the network.
 ## What
 
 `hunch shell-init` prints Bash code. Running it does not change the calling
-shell. You inspect that output, then evaluate it from a startup file.
+shell. You inspect that output, then put one line in `~/.bash_aliases`.
 
 Once sourced, a successful prediction prints on its own line above the next
 prompt. `Ctrl-X Ctrl-P` inserts the saved suggestion when `READLINE_LINE` is
@@ -88,28 +88,43 @@ print history text.
 
 ## Install and run
 
-Install Hunch in an isolated environment with
-[`uv`](https://docs.astral.sh/uv/):
+`uv tool install .` puts `hunch` in its own environment. Other Python projects
+keep their packages.
 
 ```bash
 uv tool install .
-hunch train
-hunch predict
+hunch train --device cpu
+```
+
+The install uses CPU PyTorch wheels, so training runs on this WSL machine
+without a CUDA driver. `--device auto` is the default and uses CUDA only when
+this build can actually place tensors there. `--tiny` selects a small CPU
+profile. `--epochs`, `--batch-size`, and `--seed` are available for controlled
+runs. Epochs are limited to 20.
+
+Add this line to `~/.bash_aliases`. Interactive Bash already sources that file
+from `~/.bashrc`.
+
+```bash
 eval "$(hunch shell-init)"
+```
+
+Open a new shell. A suggestion prints above the prompt. `Ctrl-X Ctrl-P` inserts
+it when the line is empty. It does not run the command.
+
+```bash
+hunch predict
 hunch stats
 ```
 
+Checkpoints and counters live under `$XDG_DATA_HOME/hunch`, or
+`~/.local/share/hunch` when that variable is unset. They stay out of the
+repository.
+
 By default, Hunch reads `$HISTFILE`. If that variable is unset, it reads
-`~/.bash_history`.
-
-Use `--device cpu` to force CPU training. The default `--device auto` uses CUDA
-only when PyTorch reports a usable CUDA device. `--tiny` selects a small CPU
-profile by default. `--epochs`, `--batch-size`, and `--seed` are also
-available for controlled runs. Epochs are limited to 20.
-
-`hunch predict` reads history again, so commands you typed after the last
-training run are in the command context. Inspect the suggestion before you
-run it.
+`~/.bash_history`. `hunch predict` reads history again, so commands you typed
+after the last training run are in the command context. Inspect the suggestion
+before you run it.
 
 ## Training data
 
@@ -125,43 +140,95 @@ cross a split boundary because they were already present when the target ran.
 Validation chooses the checkpoint. The test portion is evaluated after that
 choice and does not affect training.
 
-## Byte-level transformer
+## Follow one command
 
-The transformer maps each UTF-8 byte directly to token IDs 0 through 255. It
-uses token 256 as a command boundary and token 257 for padding. It needs no
-unknown, beginning-of-sequence, or subword token.
-
-For three context commands and a target command, the token stream is:
+Take a history fragment that ends with `git push`:
 
 ```text
-bytes(command 1), boundary,
-bytes(command 2), boundary,
-bytes(command 3), boundary,
-bytes(target), boundary
+#1700000000
+
+git status
+git add .
+git commit
+git push
 ```
 
-The model receives each token and predicts the next token. Loss labels for the
-context are `-100`, which PyTorch ignores. The first target byte is therefore
-predicted from the final context boundary. The target boundary is included in
-the loss so the model learns when to stop. The model uses a 256-token causal
-window. Long targets are split across windows so every target byte receives a
-loss.
+`read_usable_history` splits on physical newlines. The timestamp line and the
+blank line drop out. Each remaining line is one command. A command that wrapped
+on screen but was saved as one physical line stays one command. Hunch does not
+rebuild multiline Bash entries.
 
-The default model has four decoder blocks, four attention heads, 128-wide
-embeddings, 512-wide feed-forward layers, learned positions, tied input and
-output embeddings, LayerNorm, residual connections, and 0.1 dropout. The
-implementation uses ordinary PyTorch tensor operations for causal attention.
+`is_sensitive` then drops lines that look like passwords, tokens, private keys,
+authorization headers, or URL credentials. `git push` stays. `export
+API_TOKEN=...` never becomes an example or command context. The filter is a
+precaution. It is not a guarantee. Bash `HISTCONTROL=ignoreboth` already omitted
+commands that started with a space, so Hunch cannot train on a line Bash never
+saved. Prefix a sensitive command with a space to keep it out of later runs.
 
-Training uses a fixed seed and AdamW for at most 20 epochs. It keeps the model
-state with the lowest validation loss in memory. It evaluates exact-command
-accuracy with greedy generation. It reports bits per byte from target-byte
-cross-entropy. The terminating boundary is excluded from that metric's
-numerator and denominator.
+Those four usable lines become one example. The command context is `git status`,
+`git add .`, and `git commit`. The target is `git push`.
 
-The most-common and command-ngram predictors remain fixed count baselines.
-They are fitted only on the training commands and are reported beside the
-transformer on validation and test data. They are not saved as production
-state.
+`ByteTokenizer.encode_command` maps each UTF-8 byte to token IDs 0 through 255.
+`git push` is eight tokens. A character such as `é` is two tokens. Token
+256 is the command boundary. Token 257 pads a batch. There is no unknown token
+and no subword vocabulary. The stream for this example is:
+
+```text
+bytes(git status), 256,
+bytes(git add .), 256,
+bytes(git commit), 256,
+bytes(git push), 256
+```
+
+`encode_windows` turns that stream into `input_ids` of shape `[sequence]`, then
+a batch of shape `[batch, sequence]`. Sequence length is at most 256. Token
+embeddings are `[batch, sequence, 128]`. Four attention heads view that as
+`[batch, 4, sequence, 32]`. Attention scores are `[batch, 4, sequence,
+sequence]`. The language-model head writes logits of shape `[batch, sequence,
+258]`.
+
+The default model stacks four `DecoderBlock`s. Each block is pre-norm:
+LayerNorm, causal attention, residual add, LayerNorm, a 128-to-512-to-128 GELU
+feed-forward, residual add. Dropout is 0.1. Token and position embeddings are
+learned. The output head shares weights with the token embedding.
+
+`CausalSelfAttention` scores queries against keys, divides by `sqrt(32)`, and
+fills the upper triangle of `causal_mask` so position `t` cannot see `t + 1`.
+That is the causal window the decoder actually uses.
+
+Labels for context positions are `-100`, the `IGNORE_INDEX` that
+`ByteDecoderTransformer.loss` passes to `cross_entropy`. The first byte of
+`git push` is therefore predicted from the final context boundary. The target
+boundary stays in the loss so the model learns when to stop. Long targets are
+split across windows so every target byte still receives a loss.
+
+`train_transformer` starts from random weights with seed 42. Each step computes
+that loss, calls `loss.backward()`, clips gradients to 1.0, and runs
+`AdamW.step` with learning rate `3e-4` and weight decay `0.01`. Backward is the
+gradient. AdamW is the update.
+
+After each epoch, validation mean loss is measured on later commands. The
+`state_dict` with the lowest validation loss stays in memory. A later epoch
+replaces it only by beating it. Test evaluation runs after that choice.
+`save_model` writes that selected checkpoint. The file can memorize history
+text, which is why it lives in the private data directory and why Hunch does
+not write a second cleaned history file.
+
+The most-common baseline always emits the most frequent training command. The
+command-ngram baseline counts the next command after a three-command context
+and backs off to shorter contexts when that context is new. Both are fitted
+only on training commands and printed next to the transformer. Neither is the
+checkpoint `predict` loads.
+
+Exact-command accuracy asks whether greedy generation matched the next recorded
+line. Bits per byte asks how many bits the model spends on each target UTF-8
+byte. A model can be unsurprised by the next byte and still rarely emit the
+exact next command. The terminating boundary is left out of bits per byte.
+
+`generate` is greedy. Each step takes `argmax`. It stops at token 256 or gives
+up after 256 bytes. `hunch predict` prints that line or nothing. The prompt
+hook never runs it. `Ctrl-X Ctrl-P` only copies it into an empty
+`READLINE_LINE`. Enter is what executes it.
 
 ## Private state and failures
 
