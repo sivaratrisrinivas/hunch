@@ -17,7 +17,9 @@ from hunch.model import (
     evaluate_model,
     examples_from_commands,
 )
+from hunch.shell import BASH_INTEGRATION
 from hunch.state import StateError, load_model, save_model
+from hunch.stats import increment_stat, load_stats, record_event, render_stats
 from hunch.transformer import (
     EvaluationMetrics,
     TrainingConfig,
@@ -83,7 +85,9 @@ def train(options: argparse.Namespace) -> int:
     _print_accuracy("validation command-ngram", validation_ngram)
     _print_accuracy("test most-common", test_common)
     _print_accuracy("test command-ngram", test_ngram)
-    save_model(fit.model, state_directory())
+    destination = state_directory()
+    save_model(fit.model, destination)
+    increment_stat(destination, "training_runs")
     return 0
 
 
@@ -97,6 +101,21 @@ def predict() -> int:
     suggestion = model.generate(prepared.commands[-MAX_ORDER:])
     if suggestion is not None and _valid_suggestion(suggestion):
         print(suggestion)
+    return 0
+
+
+def show_stats() -> int:
+    print(render_stats(load_stats(state_directory())), end="")
+    return 0
+
+
+def record(event: str) -> int:
+    record_event(state_directory(), event)
+    return 0
+
+
+def shell_init() -> int:
+    print(BASH_INTEGRATION, end="")
     return 0
 
 
@@ -155,6 +174,16 @@ def parser() -> argparse.ArgumentParser:
         "--device", choices=("auto", "cpu", "cuda"), default=None
     )
     subcommands.add_parser("predict", help="print one predicted command")
+    subcommands.add_parser(
+        "stats", help="show training runs and suggestion counts"
+    )
+    subcommands.add_parser(
+        "shell-init", help="print Bash integration for prompt suggestions"
+    )
+    record_parser = subcommands.add_parser(
+        "record", help="record a displayed or inserted suggestion"
+    )
+    record_parser.add_argument("event", choices=("displayed", "inserted"))
     return command_parser
 
 
@@ -163,7 +192,13 @@ def run(arguments: Sequence[str] | None = None) -> int:
     try:
         if options.command == "train":
             return train(options)
-        return predict()
+        if options.command == "predict":
+            return predict()
+        if options.command == "stats":
+            return show_stats()
+        if options.command == "shell-init":
+            return shell_init()
+        return record(options.event)
     except (HistoryError, StateError, OSError, RuntimeError, ValueError) as error:
         print(f"hunch: error: {error}", file=sys.stderr)
         return 2

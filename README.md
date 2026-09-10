@@ -52,6 +52,8 @@ Install Hunch in an isolated environment with
 uv tool install .
 hunch train
 hunch predict
+eval "$(hunch shell-init)"
+hunch stats
 ```
 
 By default, Hunch reads `$HISTFILE`. If that variable is unset, it reads
@@ -65,6 +67,16 @@ available for controlled runs. Epochs are limited to 20.
 `hunch predict` reads history again, so commands you typed after the last
 training run are in the command context. Inspect the suggestion before you
 run it.
+
+`hunch shell-init` prints Bash code. Review it, then evaluate it from your
+startup file. The prompt hook shows one suggestion on the line above the
+prompt. `Ctrl-X Ctrl-P` inserts that suggestion only when the editable line
+is empty. Insertion never runs the command. If a prediction takes more than
+200 milliseconds, automatic prompt prediction stops for that shell session
+and `Ctrl-X Ctrl-P` requests a suggestion on demand.
+
+`hunch stats` reports training runs, suggestions displayed, and suggestions
+inserted. The counters store no command context and no suggestion text.
 
 ## Training data
 

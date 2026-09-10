@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from hunch.state import STATE_FILENAME
+from hunch.stats import STATS_FILENAME
 from hunch.transformer import (
     ARCHITECTURE_VERSION,
     TOKENIZER_VERSION,
@@ -89,10 +90,12 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     assert state_file.is_file()
     assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
     assert stat.S_IMODE(state_file.parent.stat().st_mode) == 0o700
-    assert not any(
-        path.is_file() and path != state_file
+    artifacts = {
+        path.name
         for path in (home / ".local" / "share" / "hunch").iterdir()
-    )
+        if path.is_file()
+    }
+    assert artifacts == {STATE_FILENAME, STATS_FILENAME}
 
     write_history(home, [*commands, "git status", "git add .", "git commit"])
     predicted = run_hunch(home, "predict")
