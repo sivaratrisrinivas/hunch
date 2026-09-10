@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
 import torch
 import pytest
 
 from hunch.model import Example
+from hunch.state import load_model
 import hunch.transformer as transformer
 from hunch.transformer import (
     ByteDecoderTransformer,
@@ -14,6 +16,7 @@ from hunch.transformer import (
     TrainingConfig,
     train_transformer,
 )
+from tests.scripted import install_scripted_checkpoint
 
 
 def test_byte_tokenizer_maps_bytes_and_shifts_target_labels() -> None:
@@ -108,3 +111,21 @@ def test_training_uses_bounded_minibatches(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     assert observed_batch_sizes[:4] == [2, 2, 2, 1]
+
+
+def test_load_model_falls_back_to_cpu_when_cuda_placement_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    context = ("one", "two", "three")
+    install_scripted_checkpoint(home, context, b"ok")
+
+    def fail_cuda(
+        self: ByteDecoderTransformer, *args: object, **kwargs: object
+    ) -> ByteDecoderTransformer:
+        raise RuntimeError("cuda placement failed")
+
+    monkeypatch.setattr(ByteDecoderTransformer, "to", fail_cuda)
+    loaded = load_model(home / ".local" / "share" / "hunch", torch.device("cuda"))
+
+    assert next(loaded.parameters()).device.type == "cpu"

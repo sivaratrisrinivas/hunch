@@ -103,9 +103,11 @@ def predict() -> int:
 def _valid_suggestion(suggestion: str) -> bool:
     if not suggestion.strip() or len(suggestion.encode("utf-8")) > MAX_SUGGESTION_BYTES:
         return False
-    if "\n" in suggestion or "\r" in suggestion or is_sensitive(suggestion):
+    if is_sensitive(suggestion):
         return False
-    return not any(unicodedata.category(character) == "Cc" for character in suggestion)
+    return not any(
+        unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in suggestion
+    )
 
 
 def _print_accuracy(label: str, accuracy: Accuracy) -> None:

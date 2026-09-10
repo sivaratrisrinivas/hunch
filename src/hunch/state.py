@@ -46,7 +46,7 @@ def save_model(model: ByteDecoderTransformer, state_directory: Path) -> Path:
             torch.save(payload, checkpoint)
             checkpoint.flush()
             os.fsync(checkpoint.fileno())
-        _load_checkpoint_path(temporary_path, torch.device("cpu"))
+        _load_checkpoint_path(temporary_path)
         os.replace(temporary_path, destination)
         temporary_path = None
         _best_effort_sync_directory(state_directory)
@@ -76,21 +76,14 @@ def load_model(
         raise StateError(
             f"model state does not exist: {destination}; run 'hunch train' first"
         )
+    model = _read_checkpoint(destination)
+    target = device or torch.device("cpu")
+    if target.type == "cpu":
+        return model
     try:
-        return _load_checkpoint_path(destination, device or torch.device("cpu"))
-    except (
-        OSError,
-        EOFError,
-        IndexError,
-        KeyError,
-        pickle.UnpicklingError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ) as error:
-        raise StateError(
-            f"model state is unreadable: {destination}: {error}"
-        ) from error
+        return model.to(target)
+    except (RuntimeError, OSError):
+        return _read_checkpoint(destination)
 
 
 def _checkpoint_payload(model: ByteDecoderTransformer) -> dict[str, object]:
@@ -111,7 +104,23 @@ def _checkpoint_payload(model: ByteDecoderTransformer) -> dict[str, object]:
     }
 
 
-def _load_checkpoint_path(path: Path, device: torch.device) -> ByteDecoderTransformer:
+def _read_checkpoint(path: Path) -> ByteDecoderTransformer:
+    try:
+        return _load_checkpoint_path(path)
+    except (
+        OSError,
+        EOFError,
+        IndexError,
+        KeyError,
+        pickle.UnpicklingError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise StateError(f"model state is unreadable: {path}: {error}") from error
+
+
+def _load_checkpoint_path(path: Path) -> ByteDecoderTransformer:
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict):
         raise ValueError("checkpoint must contain a mapping")
@@ -142,7 +151,7 @@ def _load_checkpoint_path(path: Path, device: torch.device) -> ByteDecoderTransf
 
     model = ByteDecoderTransformer(config)
     model.load_state_dict(dict(raw_state), strict=True)
-    return model.to(device)
+    return model
 
 
 def _best_effort_sync_directory(state_directory: Path) -> None:

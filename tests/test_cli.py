@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import stat
@@ -7,11 +8,18 @@ import subprocess
 import sys
 
 import pytest
+import torch
 
-from hunch.cli import _valid_suggestion
+from hunch.state import STATE_FILENAME
+from hunch.transformer import (
+    ARCHITECTURE_VERSION,
+    TOKENIZER_VERSION,
+)
+from tests.scripted import install_scripted_checkpoint
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
+HISTORY_MARKER = "UNIQUE_HISTORY_MARKER_do_not_leak"
 
 
 def run_hunch(
@@ -215,28 +223,137 @@ def test_failed_retraining_preserves_a_valid_checkpoint(tmp_path: Path) -> None:
     assert state.read_bytes() == original
 
 
+def test_predict_prints_one_undecorated_suggestion(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    context = ("ls", "cd src", "git status")
+    write_history(home, [HISTORY_MARKER, "export API_TOKEN=secret", *context])
+    install_scripted_checkpoint(home, context, b"git push")
+
+    predicted = run_hunch(home, "predict", cuda_visible_devices="")
+
+    assert predicted.returncode == 0, predicted.stderr
+    assert predicted.stderr == ""
+    assert predicted.stdout == "git push\n"
+
+
+def test_predict_keeps_the_most_recent_context_bytes(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    context = ("A" * 80, "B" * 80, "C" * 80)
+    write_history(home, list(context))
+    install_scripted_checkpoint(home, context, b"recent")
+
+    predicted = run_hunch(home, "predict")
+
+    assert predicted.returncode == 0, predicted.stderr
+    assert predicted.stderr == ""
+    assert predicted.stdout == "recent\n"
+
+
+@pytest.mark.parametrize(
+    ("continuation", "emit_boundary"),
+    [
+        (b"", True),
+        (b"   ", True),
+        (b"echo a\necho b", True),
+        (b"echo a\recho b", True),
+        (b"A" * 8, False),
+        (bytes([0xC0]), True),
+        (b"echo \x07bell", True),
+        (b"echo unsafe\xc2\x85text", True),
+        (b"API_KEY=xyz", True),
+    ],
+    ids=[
+        "blank",
+        "whitespace",
+        "newline",
+        "carriage-return",
+        "oversized",
+        "invalid-utf8",
+        "bell",
+        "c1-control",
+        "sensitive",
+    ],
+)
+def test_predict_discards_unusable_suggestions(
+    tmp_path: Path, continuation: bytes, emit_boundary: bool
+) -> None:
+    home = tmp_path / "home"
+    context = ("one", "two", "three")
+    write_history(home, list(context))
+    install_scripted_checkpoint(
+        home, context, continuation, emit_boundary=emit_boundary
+    )
+
+    predicted = run_hunch(home, "predict")
+
+    assert predicted.returncode == 0, predicted.stderr
+    assert predicted.stderr == ""
+    assert predicted.stdout == ""
+
+
 def test_predict_failure_is_clear_and_prints_no_suggestion(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    write_history(home, patterned_history())
+    write_history(home, [HISTORY_MARKER, *patterned_history()])
 
     result = run_hunch(home, "predict")
 
     assert result.returncode != 0
     assert result.stdout == ""
     assert "model state does not exist" in result.stderr
+    assert HISTORY_MARKER not in result.stderr
+    assert HISTORY_MARKER not in result.stdout
 
 
-def test_predict_rejects_a_control_character_suggestion(tmp_path: Path) -> None:
+def test_predict_rejects_incompatible_and_unreadable_checkpoints(
+    tmp_path: Path,
+) -> None:
     home = tmp_path / "home"
-    unsafe_suggestion = "echo unsafe\u0085text"
-    assert not _valid_suggestion(unsafe_suggestion)
-    cycle = ["one", "two", "three", unsafe_suggestion] * 12
-    write_history(home, cycle)
-    trained = run_hunch(home, "train", "--tiny", "--device", "cpu")
-    assert trained.returncode == 0, trained.stderr
-    write_history(home, [*cycle, "one", "two", "three"])
+    write_history(home, [HISTORY_MARKER, "ls", "cd src", "git status"])
+    state_directory = home / ".local" / "share" / "hunch"
+    state_directory.mkdir(parents=True)
+    checkpoint = state_directory / STATE_FILENAME
+    original = _incompatible_checkpoint_bytes()
+    checkpoint.write_bytes(original)
 
-    predicted = run_hunch(home, "predict")
+    incompatible = run_hunch(home, "predict")
 
-    assert predicted.returncode == 0, predicted.stderr
-    assert predicted.stdout == ""
+    assert incompatible.returncode != 0
+    assert incompatible.stdout == ""
+    assert "model state is unreadable" in incompatible.stderr
+    assert HISTORY_MARKER not in incompatible.stderr
+    assert checkpoint.read_bytes() == original
+
+    garbage = b"<<<not-a-checkpoint>>>"
+    checkpoint.write_bytes(garbage)
+    unreadable = run_hunch(home, "predict")
+
+    assert unreadable.returncode != 0
+    assert unreadable.stdout == ""
+    assert "model state is unreadable" in unreadable.stderr
+    assert HISTORY_MARKER not in unreadable.stderr
+    assert checkpoint.read_bytes() == garbage
+
+
+def _incompatible_checkpoint_bytes() -> bytes:
+    payload = {
+        "format_version": 999,
+        "architecture": ARCHITECTURE_VERSION,
+        "tokenizer": {
+            "version": TOKENIZER_VERSION,
+            "byte_ids": "identity-0-255",
+            "command_boundary_id": 256,
+            "padding_id": 257,
+        },
+        "model_config": {
+            "block_size": 64,
+            "decoder_blocks": 1,
+            "attention_heads": 2,
+            "embedding_dim": 32,
+            "feed_forward_dim": 64,
+            "dropout": 0.0,
+        },
+        "state_dict": {},
+    }
+    stream = io.BytesIO()
+    torch.save(payload, stream)
+    return stream.getvalue()

@@ -45,8 +45,17 @@ profile by default. `--epochs`, `--batch-size`, and `--seed` are also
 available for controlled runs. Epochs are limited to 20.
 
 `hunch predict` reads history again, so its command context includes entries
-saved after training. It prints one complete suggestion or nothing. Inspect
-the suggestion before you run it.
+saved after training. It loads the best saved transformer checkpoint, generates
+one suggestion with greedy byte-level decoding, and prints that command or
+nothing. Generation stops at the end-of-command token or after 256 generated
+bytes. A run that hits the byte limit without an end token is discarded as
+incomplete. If the serialized command context is longer than the model window,
+Hunch keeps the most recent bytes. Blank, multiline, oversized, invalid,
+control-character, and sensitive suggestions are discarded.
+
+Prediction runs on the CPU. It uses CUDA only when the checkpoint can be moved
+onto a PyTorch CUDA device that is actually usable. Inspect the suggestion
+before you run it.
 
 ## Training data
 

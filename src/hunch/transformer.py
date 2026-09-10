@@ -343,6 +343,7 @@ class ByteDecoderTransformer(nn.Module):
         try:
             tokens = self.tokenizer.serialize_context(context)
             generated: list[int] = []
+            stopped_at_boundary = False
             for _ in range(min(max_new_bytes, MAX_GENERATED_BYTES)):
                 window = tokens[-self.config.block_size :]
                 input_ids = torch.tensor(
@@ -352,11 +353,14 @@ class ByteDecoderTransformer(nn.Module):
                 logits[self.tokenizer.padding_token] = -torch.inf
                 token = int(torch.argmax(logits).item())
                 if token == self.tokenizer.boundary_token:
+                    stopped_at_boundary = True
                     break
                 if token >= BYTE_VOCAB_SIZE:
                     return None
                 generated.append(token)
                 tokens.append(token)
+            if not stopped_at_boundary:
+                return None
             return self.tokenizer.decode_bytes(generated)
         finally:
             if was_training:
