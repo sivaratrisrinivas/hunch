@@ -12,7 +12,7 @@ The guess comes from a small language model you train on your own Bash history, 
 
 After setup, a new prompt can print one guess. `Ctrl-X Ctrl-P` copies it onto an empty line. You still press Enter to run it. You still ignore it if it is wrong.
 
-The Champion and the Scoreboard sit in `~/.local/share/hunch`. Closing the terminal does not delete them. The guess you see is from that Champion, not from a count of past commands. After eight new usable commands, the hook starts an Update from that Champion. New weights stay only if exact-command accuracy on the Scoreboard does not fall.
+The Champion and the Scoreboard sit in `~/.local/share/hunch`. Closing the terminal does not delete them. The guess you see is from that Champion, not from a count of past commands. After eight new usable commands, the hook starts an Update from that Champion. New weights stay only if exact-command accuracy on the Scoreboard does not fall. If the GPU is missing or busy, command-ngram still takes the Pile. The Champion does not change.
 
 Lines that look like passwords, tokens, or keys never go into training and never come back as a guess. Prefix a secret command with a space so Bash never saves it. That is stronger than Hunch's filter, which is a precaution, not a lock.
 
@@ -24,7 +24,7 @@ First-run is three steps. More than that, and people stop before they see a sugg
 
 `Ctrl-R` only finds a line you already typed. Counting the most common command has the same limit. It can only replay something it has seen whole. A language model writes the next command one character at a time, so it can assemble a line that never appeared as one piece. That only helps if the guess shows up before you start typing. Hunch leaves a half-typed line alone.
 
-Your history stays on the machine. Setup writes a Scoreboard of held-out command-context and next-command pairs into the state directory. That file is command text on purpose, so trimming `~/.bash_history` later does not change it. An Update is kept only if the transformer's exact-command accuracy on that set does not fall. `hunch stats` still shows the three integer counters, and after an Update it also shows the last keep or discard, with the command-ngram number beside it. That number is a baseline. It is never the guess.
+Your history stays on the machine. Setup writes a Scoreboard of held-out command-context and next-command pairs into the state directory. That file is command text on purpose, so trimming `~/.bash_history` later does not change it. An Update is kept only if the transformer's exact-command accuracy on that set does not fall. `hunch stats` still shows the three integer counters, and after an Update it also shows the last keep, discard, or that the transformer waited, with the command-ngram number beside it. That number is a baseline. It is never the guess.
 
 On a laptop CPU, one guess can take more than 200 milliseconds. Waiting that long for every prompt is worse than no guess, so Hunch stops guessing and waits for `Ctrl-X Ctrl-P`. Open a new shell and it tries again. First-run itself does not use the CPU. If this machine has no GPU that PyTorch can use, setup stops and says so.
 
@@ -41,7 +41,7 @@ hunch setup
 
 Open a new terminal, or `source ~/.bash_aliases` and press Enter. A guess may print above the prompt. If later prompts stay quiet, `Ctrl-X Ctrl-P` still asks for one.
 
-After eight new usable commands, the hook starts `hunch update` in the background. That job continues from the Champion and keeps the new weights only if exact-command accuracy on the Scoreboard does not fall. `hunch stats` shows the last keep or discard.
+After eight new usable commands, the hook starts `hunch update` in the background. That job continues from the Champion and keeps the new weights only if exact-command accuracy on the Scoreboard does not fall. If the GPU is missing or busy, command-ngram still takes the Pile and the transformer waits. `hunch stats` shows the last keep, discard, or wait.
 
 ```bash
 hunch predict
