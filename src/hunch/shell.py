@@ -24,6 +24,62 @@ _hunch_ms() {
   printf '%s\n' $((10#$sec * 1000 + 10#${frac:0:6} / 1000))
 }
 
+_hunch_state_dir() {
+  if [[ -n ${HUNCH_STATE_DIR:-} ]]; then
+    printf '%s\n' "$HUNCH_STATE_DIR"
+  elif [[ -n ${XDG_DATA_HOME:-} ]]; then
+    printf '%s\n' "$XDG_DATA_HOME/hunch"
+  else
+    printf '%s\n' "$HOME/.local/share/hunch"
+  fi
+}
+
+_hunch_update_running() {
+  local pidfile pid
+  pidfile="$(_hunch_state_dir)/update.pid"
+  [[ -f $pidfile ]] || return 1
+  read -r pid < "$pidfile" || return 1
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+_hunch_pile_ready() {
+  local dir hist consumed usable
+  dir="$(_hunch_state_dir)"
+  hist="${HUNCH_HISTORY_PATH:-${HISTFILE:-$HOME/.bash_history}}"
+  [[ -f $dir/consumed.json && -f $hist ]] || return 1
+  consumed=$(sed -n 's/.*"consumed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$dir/consumed.json")
+  [[ $consumed =~ ^[0-9]+$ ]] || return 1
+  usable=$(awk '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      gsub(/^[ \t]+|[ \t]+$/, "", line)
+      if (line == "" || line ~ /^#[0-9]+$/) next
+      lower = tolower(line)
+      if (lower ~ /(password|passwd|passphrase|token|secret|api[_-]?key|private[_-]?key|authorization:|bearer |begin .*private key|ssh .*-i )/) next
+      n++
+    }
+    END { print n + 0 }
+  ' "$hist")
+  ((usable - consumed >= 8))
+}
+
+_hunch_maybe_update() {
+  local pidfile
+  history -a >/dev/null 2>&1 || true
+  if _hunch_update_running; then
+    return 0
+  fi
+  if ! _hunch_pile_ready; then
+    return 0
+  fi
+  pidfile="$(_hunch_state_dir)/update.pid"
+  (
+    setsid hunch update </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$pidfile"
+  )
+}
+
 _hunch_predict() {
   local start end output
   start=$(_hunch_ms "${EPOCHREALTIME:-0}")
@@ -37,6 +93,7 @@ _hunch_predict() {
 }
 
 _hunch_prompt() {
+  _hunch_maybe_update
   if [[ ${_HUNCH_AUTO} -eq 0 ]]; then
     _HUNCH_SUGGESTION=
     return 0

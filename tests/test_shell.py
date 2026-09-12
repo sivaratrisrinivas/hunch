@@ -22,6 +22,7 @@ def run_bash(
     script: str,
     *,
     path_prefix: Path | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment.update(
@@ -43,6 +44,7 @@ def run_bash(
         text=True,
         capture_output=True,
         check=False,
+        timeout=timeout,
     )
 
 
@@ -50,18 +52,48 @@ def source_hunch(body: str) -> str:
     return f"eval \"$(hunch shell-init)\"\n{body}\n"
 
 
-def install_slow_hunch(directory: Path, log: Path) -> Path:
+PILE = [f"new-{index}" for index in range(8)]
+SEVEN_NEW = PILE[:7]
+
+
+def install_logged_hunch(
+    directory: Path,
+    log: Path,
+    *,
+    sleep_predict: bool = False,
+    hold_update_seconds: float = 0,
+    fail_update: bool = False,
+) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     wrapper = directory / "hunch"
-    wrapper.write_text(
-        "#!/usr/bin/env bash\n"
-        f"printf '%s\\n' \"$1\" >> {log.as_posix()!r}\n"
-        'if [[ $1 == predict ]]; then sleep 0.25; fi\n'
-        f'exec {HUNCH_BIN.as_posix()!r} "$@"\n',
-        encoding="utf-8",
-    )
+    lines = [
+        "#!/usr/bin/env bash\n",
+        f"printf '%s\\n' \"$1\" >> {log.as_posix()!r}\n",
+    ]
+    if fail_update:
+        lines.append("if [[ $1 == update ]]; then exit 127; fi\n")
+    if hold_update_seconds:
+        lines.append(
+            f"if [[ $1 == update ]]; then sleep {hold_update_seconds}; exit 0; fi\n"
+        )
+    if sleep_predict:
+        lines.append("if [[ $1 == predict ]]; then sleep 0.25; fi\n")
+    lines.append(f'exec {HUNCH_BIN.as_posix()!r} "$@"\n')
+    wrapper.write_text("".join(lines), encoding="utf-8")
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     return wrapper
+
+
+def install_slow_hunch(directory: Path, log: Path) -> Path:
+    return install_logged_hunch(directory, log, sleep_predict=True)
+
+
+def write_consumed(home: Path, consumed: int) -> None:
+    directory = home / ".local" / "share" / "hunch"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "consumed.json").write_text(
+        json.dumps({"consumed": consumed}) + "\n", encoding="utf-8"
+    )
 
 
 def prepared_home(tmp_path: Path, suggestion: str = SUGGESTION) -> Path:
@@ -69,6 +101,32 @@ def prepared_home(tmp_path: Path, suggestion: str = SUGGESTION) -> Path:
     write_history(home, list(CONTEXT))
     install_scripted_checkpoint(home, CONTEXT, suggestion.encode())
     return home
+
+
+def pile_home(tmp_path: Path, extra: list[str] | None = None) -> Path:
+    home = prepared_home(tmp_path)
+    write_history(home, list(extra or []) + list(CONTEXT))
+    write_consumed(home, len(CONTEXT))
+    return home
+
+
+def wait_for_logged_update(log: Path) -> str:
+    return (
+        "for _ in $(seq 1 40); do\n"
+        f"  if grep -qx update {log.as_posix()!r} 2>/dev/null; then\n"
+        "    break\n"
+        "  fi\n"
+        "  sleep 0.05\n"
+        "done\n"
+    )
+
+
+def stop_background_update() -> str:
+    return (
+        "if [[ -f $HUNCH_STATE_DIR/update.pid ]]; then\n"
+        "  kill \"$(cat \"$HUNCH_STATE_DIR/update.pid\")\" 2>/dev/null || true\n"
+        "fi\n"
+    )
 
 
 def test_shell_init_emits_inspectable_bash_without_modifying_the_shell(
@@ -317,3 +375,174 @@ def test_stats_report_only_aggregate_counts_and_store_no_command_text(
     assert CONTEXT[2] not in stored
     assert SUGGESTION not in stored
     assert stat.S_IMODE((display_home / STATS_PATH).stat().st_mode) == 0o600
+
+
+def test_prompt_flushes_history_so_a_pile_can_form(tmp_path: Path) -> None:
+    home = pile_home(tmp_path)
+    log = tmp_path / "hunch-calls.log"
+    install_logged_hunch(tmp_path / "wrapper", log, hold_update_seconds=2)
+    history = home / ".bash_history"
+    before = history.read_text(encoding="utf-8")
+
+    result = run_bash(
+        home,
+        source_hunch(
+            "set -o history\n"
+            + "".join(f"history -s {command!r}\n" for command in PILE)
+            + 'eval "$PROMPT_COMMAND" >prompt.out\n'
+            + wait_for_logged_update(log)
+            + stop_background_update()
+            + "printf 'FLUSHED='\n"
+            + "cat \"$HISTFILE\"\n"
+        ),
+        path_prefix=tmp_path / "wrapper",
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert before == "\n".join(CONTEXT) + "\n"
+    assert "FLUSHED=" in result.stdout
+    flushed = result.stdout.split("FLUSHED=", 1)[1]
+    for command in PILE:
+        assert command in flushed
+    assert log.read_text(encoding="utf-8").splitlines().count("update") == 1
+
+
+def test_eight_new_usable_commands_start_update_in_the_background(
+    tmp_path: Path,
+) -> None:
+    home = pile_home(tmp_path, PILE)
+    log = tmp_path / "hunch-calls.log"
+    install_logged_hunch(tmp_path / "wrapper", log, hold_update_seconds=45)
+
+    result = run_bash(
+        home,
+        source_hunch(
+            "start=$EPOCHREALTIME\n"
+            'eval "$PROMPT_COMMAND" >prompt.out\n'
+            "end=$EPOCHREALTIME\n"
+            + wait_for_logged_update(log)
+            + "printf 'SUGGESTION='\n"
+            + "cat prompt.out\n"
+            + stop_background_update()
+            + 'printf "ELAPSED_START=%s\\n" "$start"\n'
+            + 'printf "ELAPSED_END=%s\\n" "$end"\n'
+        ),
+        path_prefix=tmp_path / "wrapper",
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"SUGGESTION={SUGGESTION}\n" in result.stdout
+    assert log.read_text(encoding="utf-8").splitlines().count("update") == 1
+    start = float(result.stdout.split("ELAPSED_START=", 1)[1].splitlines()[0])
+    end = float(result.stdout.split("ELAPSED_END=", 1)[1].splitlines()[0])
+    assert (end - start) < 30.0
+
+
+def test_seven_new_commands_do_not_start_update(tmp_path: Path) -> None:
+    home = pile_home(tmp_path, ["export API_TOKEN=secret", *SEVEN_NEW])
+    log = tmp_path / "hunch-calls.log"
+    install_logged_hunch(tmp_path / "wrapper", log, hold_update_seconds=2)
+
+    result = run_bash(
+        home,
+        source_hunch(
+            'eval "$PROMPT_COMMAND" >prompt.out\n'
+            "sleep 0.3\n"
+            "printf 'SUGGESTION='\n"
+            "cat prompt.out\n"
+        ),
+        path_prefix=tmp_path / "wrapper",
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"SUGGESTION={SUGGESTION}\n" in result.stdout
+    assert "update" not in log.read_text(encoding="utf-8").splitlines()
+
+
+def test_ninth_prompt_does_not_start_a_second_update(tmp_path: Path) -> None:
+    home = pile_home(tmp_path, PILE)
+    log = tmp_path / "hunch-calls.log"
+    install_logged_hunch(tmp_path / "wrapper", log, hold_update_seconds=60)
+
+    result = run_bash(
+        home,
+        source_hunch(
+            'eval "$PROMPT_COMMAND" >first.out\n'
+            + wait_for_logged_update(log)
+            + 'eval "$PROMPT_COMMAND" >second.out\n'
+            + "sleep 0.2\n"
+            + "printf 'FIRST='\n"
+            + "cat first.out\n"
+            + "printf 'SECOND='\n"
+            + "cat second.out\n"
+            + stop_background_update()
+        ),
+        path_prefix=tmp_path / "wrapper",
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith(f"FIRST={SUGGESTION}\n")
+    assert log.read_text(encoding="utf-8").splitlines().count("update") == 1
+
+
+def test_slow_or_missing_update_does_not_break_on_demand(
+    tmp_path: Path,
+) -> None:
+    missing_home = pile_home(tmp_path / "missing", PILE)
+    missing_log = tmp_path / "missing-calls.log"
+    install_logged_hunch(tmp_path / "missing-wrapper", missing_log, fail_update=True)
+    missing = run_bash(
+        missing_home,
+        source_hunch(
+            'eval "$PROMPT_COMMAND" >prompt.out\n'
+            "insert=$(bind -X | sed -n 's/.*\"\\([^\\\"]*\\)\"$/\\1/p')\n"
+            "READLINE_LINE=\n"
+            "READLINE_POINT=0\n"
+            '"$insert"\n'
+            "printf 'PROMPT='\n"
+            "cat prompt.out\n"
+            'printf "LINE=%s\\n" "$READLINE_LINE"\n'
+        ),
+        path_prefix=tmp_path / "missing-wrapper",
+        timeout=90,
+    )
+
+    slow_home = pile_home(tmp_path / "slow", PILE)
+    slow_log = tmp_path / "slow-calls.log"
+    install_logged_hunch(
+        tmp_path / "slow-wrapper",
+        slow_log,
+        hold_update_seconds=60,
+    )
+    slow = run_bash(
+        slow_home,
+        source_hunch(
+            'eval "$PROMPT_COMMAND" >first.out\n'
+            + wait_for_logged_update(slow_log)
+            + 'eval "$PROMPT_COMMAND" >second.out\n'
+            + "insert=$(bind -X | sed -n 's/.*\"\\([^\\\"]*\\)\"$/\\1/p')\n"
+            + "READLINE_LINE=\n"
+            + "READLINE_POINT=0\n"
+            + '"$insert"\n'
+            + "printf 'FIRST='\n"
+            + "cat first.out\n"
+            + "printf 'SECOND='\n"
+            + "cat second.out\n"
+            + 'printf "LINE=%s\\n" "$READLINE_LINE"\n'
+            + stop_background_update()
+        ),
+        path_prefix=tmp_path / "slow-wrapper",
+        timeout=90,
+    )
+
+    assert missing.returncode == 0, missing.stderr
+    assert missing.stdout == f"PROMPT={SUGGESTION}\nLINE={SUGGESTION}\n"
+    assert missing_log.read_text(encoding="utf-8").splitlines().count("update") == 1
+    assert slow.returncode == 0, slow.stderr
+    assert slow.stdout.startswith(f"FIRST={SUGGESTION}\n")
+    assert f"LINE={SUGGESTION}" in slow.stdout
+    assert slow_log.read_text(encoding="utf-8").splitlines().count("update") == 1

@@ -4,12 +4,18 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import Sequence
 
 from hunch.state import StateError
 
 
 PILE_SIZE = 8
 CONSUMED_FILENAME = "consumed.json"
+
+
+def has_pile(commands: Sequence[str], consumed: int | None) -> bool:
+    watermark = len(commands) if consumed is None else consumed
+    return len(commands) - watermark >= PILE_SIZE
 
 
 def load_consumed(state_directory: Path) -> int | None:

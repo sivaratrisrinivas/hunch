@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import os
+from contextlib import contextmanager
 from dataclasses import dataclass
+import fcntl
+import os
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Iterator, Literal, Sequence
 
 from hunch.history import HistoryError
 from hunch.model import (
@@ -14,7 +16,7 @@ from hunch.model import (
     evaluate_model,
     examples_from_commands,
 )
-from hunch.pile import PILE_SIZE, load_consumed, save_consumed
+from hunch.pile import PILE_SIZE, has_pile, load_consumed, save_consumed
 from hunch.scoreboard import load_scoreboard
 from hunch.state import STATE_FILENAME, StateError, load_model, save_model
 from hunch.transformer import (
@@ -26,6 +28,7 @@ from hunch.transformer import (
 
 
 UPDATE_LOG_FILENAME = "update.log"
+UPDATE_LOCK_FILENAME = "update.lock"
 Decision = Literal["keep", "discard"]
 
 
@@ -67,10 +70,19 @@ def apply_update(
     if not (state_directory / STATE_FILENAME).is_file():
         raise StateError("no Champion; run 'hunch setup' first")
 
+    with _exclusive_update(state_directory):
+        return _apply_update(state_directory, commands, config)
+
+
+def _apply_update(
+    state_directory: Path,
+    commands: Sequence[str],
+    config: TrainingConfig,
+) -> UpdateResult:
     consumed = load_consumed(state_directory)
     if consumed is None:
         consumed = len(commands)
-    if len(commands) - consumed < PILE_SIZE:
+    if not has_pile(commands, consumed):
         raise HistoryError("no pile of eight new usable commands")
 
     scoreboard = load_scoreboard(state_directory)
@@ -128,3 +140,24 @@ def _append_update_log(state_directory: Path, record: str) -> None:
         os.chmod(path, 0o600)
     except OSError as error:
         raise StateError(f"cannot write update log: {error}") from error
+
+
+@contextmanager
+def _exclusive_update(state_directory: Path) -> Iterator[None]:
+    try:
+        state_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        state_directory.chmod(0o700)
+        lock_path = state_directory / UPDATE_LOCK_FILENAME
+        handle = open(lock_path, "a+b")
+        os.chmod(lock_path, 0o600)
+    except OSError as error:
+        raise StateError(f"cannot lock Update: {error}") from error
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        handle.close()
+        raise StateError("an Update is already running") from error
+    try:
+        yield
+    finally:
+        handle.close()
