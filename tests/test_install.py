@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+from hunch.scoreboard import SCOREBOARD_FILENAME
 from hunch.state import STATE_FILENAME
 from hunch.stats import STATS_FILENAME
 from tests.scripted import install_scripted_checkpoint
@@ -37,7 +38,7 @@ def installed_hunch(tmp_path_factory: pytest.TempPathFactory) -> Path:
     venv_cfg = Path(sys.prefix) / "pyvenv.cfg"
     before = venv_cfg.read_bytes() if venv_cfg.is_file() else None
     installed = subprocess.run(
-        ["uv", "tool", "install", "--force", str(PROJECT_ROOT)],
+        ["uv", "tool", "install", "--force", "--refresh", str(PROJECT_ROOT)],
         cwd=PROJECT_ROOT,
         env={
             **os.environ,
@@ -107,7 +108,7 @@ def repo_state_files() -> set[Path]:
     for dirpath, dirnames, filenames in os.walk(PROJECT_ROOT):
         dirnames[:] = [name for name in dirnames if name not in SKIP_REPO_DIRS]
         for filename in filenames:
-            if filename in {STATE_FILENAME, STATS_FILENAME}:
+            if filename in {SCOREBOARD_FILENAME, STATE_FILENAME, STATS_FILENAME}:
                 found.add(Path(dirpath) / filename)
     return found
 
@@ -172,12 +173,18 @@ def test_installed_command_trains_predicts_and_keeps_state_private(
 
     state_dir = home / ".local" / "share" / "hunch"
     checkpoint = state_dir / STATE_FILENAME
+    scoreboard = state_dir / SCOREBOARD_FILENAME
     stats = state_dir / STATS_FILENAME
     assert checkpoint.is_file()
+    assert scoreboard.is_file()
     assert stats.is_file()
     assert stat.S_IMODE(checkpoint.stat().st_mode) == 0o600
+    assert stat.S_IMODE(scoreboard.stat().st_mode) == 0o600
     assert stat.S_IMODE(stats.stat().st_mode) == 0o600
     assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
+    stored_scoreboard = scoreboard.read_text(encoding="utf-8")
+    assert "git status" in stored_scoreboard
+    assert PERSONAL_CANARY not in stored_scoreboard
     assert repo_state_files() == before_repo
     assert checkpoint.resolve().is_relative_to(home.resolve())
     assert not checkpoint.resolve().is_relative_to(PROJECT_ROOT.resolve())

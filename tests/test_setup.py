@@ -3,12 +3,22 @@ from __future__ import annotations
 from argparse import Namespace
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
+from pytest import MonkeyPatch
+
 from hunch.cli import parser, setup
+from hunch.scoreboard import SCOREBOARD_FILENAME
 from hunch.shell import HOOK_ALIASES_LINE, install_hook
-from tests.test_cli import PROJECT_ROOT
+from tests.test_cli import (
+    PROJECT_ROOT,
+    holdout_pairs,
+    patterned_history,
+    scoreboard_pairs,
+    write_history,
+)
 
 
 def test_install_hook_writes_the_aliases_line_once(tmp_path: Path) -> None:
@@ -48,7 +58,9 @@ def test_setup_fails_when_no_local_gpu_is_usable(tmp_path: Path) -> None:
     assert not (home / ".local" / "share" / "hunch").exists()
 
 
-def test_setup_trains_then_writes_the_hook(tmp_path: Path, monkeypatch) -> None:
+def test_setup_trains_then_writes_the_hook(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -72,3 +84,30 @@ def test_setup_trains_then_writes_the_hook(tmp_path: Path, monkeypatch) -> None:
 def test_setup_is_a_cli_command() -> None:
     options = parser().parse_args(["setup"])
     assert options.command == "setup"
+
+
+def test_setup_writes_the_holdout_scoreboard_as_command_text(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    commands = patterned_history()
+    write_history(home, commands)
+    state_directory = home / ".local" / "share" / "hunch"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HISTFILE", str(home / ".bash_history"))
+    monkeypatch.setenv("HUNCH_HISTORY_PATH", str(home / ".bash_history"))
+    monkeypatch.setenv("HUNCH_STATE_DIR", str(state_directory))
+    monkeypatch.setattr("hunch.cli.require_cuda_device", lambda: None)
+
+    assert setup(Namespace(tiny=True, epochs=1, batch_size=None, seed=None)) == 0
+
+    scoreboard = state_directory / SCOREBOARD_FILENAME
+    stored = scoreboard.read_text(encoding="utf-8")
+    expected = holdout_pairs(commands)
+    assert scoreboard_pairs(scoreboard) == expected
+    assert "git status" in stored
+    assert stat.S_IMODE(scoreboard.stat().st_mode) == 0o600
+    assert HOOK_ALIASES_LINE in (home / ".bash_aliases").read_text(encoding="utf-8")
+
+    write_history(home, commands[:8])
+    assert scoreboard_pairs(scoreboard) == expected

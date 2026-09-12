@@ -24,7 +24,7 @@ First-run is three steps. More than that, and people stop before they see a sugg
 
 `Ctrl-R` only finds a line you already typed. Counting the most common command has the same limit. It can only replay something it has seen whole. A language model writes the next command one character at a time, so it can assemble a line that never appeared as one piece. That only helps if the guess shows up before you start typing. Hunch leaves a half-typed line alone.
 
-Your history stays on the machine. Hunch's counters are three integers. How many times you trained. How many guesses it showed. How many you inserted. Not the text.
+Your history stays on the machine. Setup writes a Scoreboard of held-out command-context and next-command pairs into the state directory. That file is command text on purpose, so trimming `~/.bash_history` later does not change it. `hunch stats` still shows three integers: how many times you trained, how many guesses it showed, and how many you inserted.
 
 On a laptop CPU, one guess can take more than 200 milliseconds. Waiting that long for every prompt is worse than no guess, so Hunch stops guessing and waits for `Ctrl-X Ctrl-P`. Open a new shell and it tries again. First-run itself does not use the CPU. If this machine has no GPU that PyTorch can use, setup stops and says so.
 

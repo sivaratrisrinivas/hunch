@@ -17,6 +17,7 @@ from hunch.model import (
     evaluate_model,
     examples_from_commands,
 )
+from hunch.scoreboard import save_scoreboard
 from hunch.shell import BASH_INTEGRATION, install_hook
 from hunch.state import StateError, load_model, save_model
 from hunch.stats import increment_stat, load_stats, record_event, render_stats
@@ -102,6 +103,7 @@ def train(options: argparse.Namespace) -> int:
     _print_accuracy("test command-ngram", test_ngram)
     destination = state_directory()
     save_model(fit.model, destination)
+    save_scoreboard(destination, split.validation)
     increment_stat(destination, "training_runs")
     return 0
 

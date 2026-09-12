@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from pathlib import Path
 import stat
@@ -10,6 +11,8 @@ import sys
 import pytest
 import torch
 
+from hunch.model import chronological_split
+from hunch.scoreboard import SCOREBOARD_FILENAME
 from hunch.state import STATE_FILENAME
 from hunch.stats import STATS_FILENAME
 from hunch.transformer import (
@@ -95,13 +98,30 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
         for path in (home / ".local" / "share" / "hunch").iterdir()
         if path.is_file()
     }
-    assert artifacts == {STATE_FILENAME, STATS_FILENAME}
+    assert artifacts == {SCOREBOARD_FILENAME, STATE_FILENAME, STATS_FILENAME}
+    scoreboard = home / ".local" / "share" / "hunch" / SCOREBOARD_FILENAME
+    stored_scoreboard = scoreboard.read_bytes()
+    assert stat.S_IMODE(scoreboard.stat().st_mode) == 0o600
+    assert scoreboard_pairs(scoreboard) == holdout_pairs(commands)
+    assert b"git status" in stored_scoreboard
+    assert b"git commit" in stored_scoreboard
+
+    write_history(home, commands[:8])
+    assert scoreboard.read_bytes() == stored_scoreboard
+    counted = run_hunch(home, "stats")
+    assert counted.returncode == 0, counted.stderr
+    assert counted.stdout == (
+        "training runs: 1\n"
+        "suggestions displayed: 0\n"
+        "suggestions inserted: 0\n"
+    )
 
     write_history(home, [*commands, "git status", "git add .", "git commit"])
     predicted = run_hunch(home, "predict")
     assert predicted.returncode == 0, predicted.stderr
     assert predicted.stderr == ""
     assert predicted.stdout.count("\n") <= 1
+    assert scoreboard.read_bytes() == stored_scoreboard
 
 
 def test_sensitive_commands_are_filtered_before_training(tmp_path: Path) -> None:
@@ -335,6 +355,19 @@ def test_predict_rejects_incompatible_and_unreadable_checkpoints(
     assert "model state is unreadable" in unreadable.stderr
     assert HISTORY_MARKER not in unreadable.stderr
     assert checkpoint.read_bytes() == garbage
+
+
+def holdout_pairs(commands: list[str]) -> list[dict[str, object]]:
+    return [
+        {"context": list(example.context), "next": example.target}
+        for example in chronological_split(commands).validation
+    ]
+
+
+def scoreboard_pairs(path: Path) -> list[dict[str, object]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(payload, list)
+    return payload
 
 
 def _incompatible_checkpoint_bytes() -> bytes:
