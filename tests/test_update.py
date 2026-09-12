@@ -133,3 +133,42 @@ def test_update_keeps_when_scoreboard_accuracy_does_not_fall(tmp_path: Path) -> 
         stored_stats = (state_dir(home) / STATS_FILENAME).read_text(encoding="utf-8")
         assert "alpha" not in stored_stats
         assert "pile-0" not in stored_stats
+
+
+def test_update_waits_when_cuda_is_hidden_and_still_feeds_command_ngram(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    old = [f"old-{index}" for index in range(12)] + list(CONTEXT)
+    pile = [f"pile-{index}" for index in range(8)]
+    champion = install_champion(home, old, pile)
+    save_scoreboard(
+        state_dir(home), [Example(CONTEXT, CHAMPION_SUGGESTION)]
+    )
+    original = champion.read_bytes()
+
+    result = run_hunch(home, "update", cuda_visible_devices="")
+
+    assert result.returncode == 0, result.stderr
+    assert champion.read_bytes() == original
+    record = (state_dir(home) / UPDATE_LOG_FILENAME).read_text(encoding="utf-8")
+    assert "the transformer waited" in record
+    assert "command-ngram exact-command accuracy:" in record
+    assert "the transformer waited" in result.stdout
+    assert "command-ngram exact-command accuracy:" in result.stdout
+    consumed = json.loads(
+        (state_dir(home) / CONSUMED_FILENAME).read_text(encoding="utf-8")
+    )
+    assert consumed == {"consumed": len(old) + 8}
+    counted = run_hunch(home, "stats")
+    assert counted.returncode == 0, counted.stderr
+    assert "last update: the transformer waited" in counted.stdout
+    assert "command-ngram exact-command accuracy:" in counted.stdout
+    write_history(home, list(CONTEXT))
+    predicted = run_hunch(home, "predict", cuda_visible_devices="")
+    assert predicted.returncode == 0, predicted.stderr
+    assert predicted.stdout == f"{CHAMPION_SUGGESTION}\n"
+    again = run_hunch(home, "update", cuda_visible_devices="")
+    assert again.returncode == 2
+    assert "no pile" in again.stderr.lower()
+    assert champion.read_bytes() == original

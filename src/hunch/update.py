@@ -29,23 +29,29 @@ from hunch.transformer import (
 
 UPDATE_LOG_FILENAME = "update.log"
 UPDATE_LOCK_FILENAME = "update.lock"
-Decision = Literal["keep", "discard"]
+Decision = Literal["keep", "discard", "wait"]
 
 
 @dataclass(frozen=True)
 class UpdateResult:
     decision: Decision
-    transformer: Accuracy
+    transformer: Accuracy | None
     ngram: Accuracy
 
     @property
     def record(self) -> str:
+        ngram = (
+            f"command-ngram exact-command accuracy: {self.ngram.percent:.2f}% "
+            f"({self.ngram.correct}/{self.ngram.total})"
+        )
+        if self.decision == "wait":
+            return f"the transformer waited {ngram}"
+        assert self.transformer is not None
         return (
             f"{self.decision} "
             f"transformer exact-command accuracy: {self.transformer.percent:.2f}% "
             f"({self.transformer.correct}/{self.transformer.total}) "
-            f"command-ngram exact-command accuracy: {self.ngram.percent:.2f}% "
-            f"({self.ngram.correct}/{self.ngram.total})"
+            f"{ngram}"
         )
 
 
@@ -86,35 +92,50 @@ def _apply_update(
         raise HistoryError("no pile of eight new usable commands")
 
     scoreboard = load_scoreboard(state_directory)
-    old_examples = examples_from_commands(commands[:consumed])
-    new_examples = _pile_examples(commands, consumed)
-    if not old_examples:
-        raise HistoryError("no commands from before the Pile to mix into the Update")
+    decision: Decision
+    transformer: Accuracy | None
+    if _transformer_should_wait(config):
+        decision = "wait"
+        transformer = None
+    else:
+        old_examples = examples_from_commands(commands[:consumed])
+        new_examples = _pile_examples(commands, consumed)
+        if not old_examples:
+            raise HistoryError(
+                "no commands from before the Pile to mix into the Update"
+            )
 
-    device = resolve_device(config.device)
-    champion = load_model(state_directory, device)
-    before = evaluate_transformer(
-        champion, scoreboard, batch_size=config.batch_size
-    )
-    candidate = continue_transformer(champion, old_examples, new_examples, config)
-    after = evaluate_transformer(
-        candidate, scoreboard, batch_size=config.batch_size
-    )
-    decision: Decision = (
-        "keep"
-        if after.exact_accuracy.correct >= before.exact_accuracy.correct
-        else "discard"
-    )
-    if decision == "keep":
-        save_model(candidate, state_directory)
+        device = resolve_device(config.device)
+        champion = load_model(state_directory, device)
+        before = evaluate_transformer(
+            champion, scoreboard, batch_size=config.batch_size
+        )
+        candidate = continue_transformer(
+            champion, old_examples, new_examples, config
+        )
+        after = evaluate_transformer(
+            candidate, scoreboard, batch_size=config.batch_size
+        )
+        decision = (
+            "keep"
+            if after.exact_accuracy.correct >= before.exact_accuracy.correct
+            else "discard"
+        )
+        if decision == "keep":
+            save_model(candidate, state_directory)
+        transformer = after.exact_accuracy
 
     ngram = evaluate_model(
         CountModel.train(commands[: consumed + PILE_SIZE]), scoreboard
     )
-    result = UpdateResult(decision, after.exact_accuracy, ngram)
+    result = UpdateResult(decision, transformer, ngram)
     save_consumed(state_directory, consumed + PILE_SIZE)
     _append_update_log(state_directory, result.record)
     return result
+
+
+def _transformer_should_wait(config: TrainingConfig) -> bool:
+    return config.device != "cpu" and resolve_device("cuda").type != "cuda"
 
 
 def _pile_examples(commands: Sequence[str], consumed: int) -> list[Example]:
