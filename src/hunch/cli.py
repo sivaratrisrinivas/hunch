@@ -17,9 +17,10 @@ from hunch.model import (
     evaluate_model,
     examples_from_commands,
 )
+from hunch.pile import save_consumed
 from hunch.scoreboard import save_scoreboard
 from hunch.shell import BASH_INTEGRATION, install_hook
-from hunch.state import StateError, load_model, save_model
+from hunch.state import STATE_FILENAME, StateError, load_model, save_model
 from hunch.stats import increment_stat, load_stats, record_event, render_stats
 from hunch.transformer import (
     EvaluationMetrics,
@@ -29,6 +30,7 @@ from hunch.transformer import (
     resolve_device,
     train_transformer,
 )
+from hunch.update import apply_update, last_update_record
 
 
 MAX_SUGGESTION_BYTES = 256
@@ -104,7 +106,21 @@ def train(options: argparse.Namespace) -> int:
     destination = state_directory()
     save_model(fit.model, destination)
     save_scoreboard(destination, split.validation)
+    save_consumed(destination, len(prepared.commands))
     increment_stat(destination, "training_runs")
+    return 0
+
+
+def update(options: argparse.Namespace) -> int:
+    destination = state_directory()
+    if not (destination / STATE_FILENAME).is_file():
+        raise StateError("no Champion; run 'hunch setup' first")
+    result = apply_update(
+        destination,
+        read_usable_history(history_path()).commands,
+        _training_config(options),
+    )
+    print(result.record)
     return 0
 
 
@@ -122,7 +138,11 @@ def predict() -> int:
 
 
 def show_stats() -> int:
-    print(render_stats(load_stats(state_directory())), end="")
+    directory = state_directory()
+    print(
+        render_stats(load_stats(directory), last_update_record(directory)),
+        end="",
+    )
     return 0
 
 
@@ -160,9 +180,10 @@ def _print_metrics(label: str, metrics: EvaluationMetrics) -> None:
 
 def _training_config(options: argparse.Namespace) -> TrainingConfig:
     defaults = TrainingConfig.tiny() if options.tiny else TrainingConfig()
+    epochs = getattr(options, "epochs", None)
     return TrainingConfig(
         model=defaults.model,
-        epochs=options.epochs if options.epochs is not None else defaults.epochs,
+        epochs=epochs if epochs is not None else defaults.epochs,
         batch_size=(
             options.batch_size
             if options.batch_size is not None
@@ -199,6 +220,17 @@ def parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--epochs", type=int, default=None)
     setup_parser.add_argument("--batch-size", type=int, default=None)
     setup_parser.add_argument("--seed", type=int, default=None)
+    update_parser = subcommands.add_parser(
+        "update", help="continue from the Champion when a Pile exists"
+    )
+    update_parser.add_argument(
+        "--tiny", action="store_true", help="use a small training profile"
+    )
+    update_parser.add_argument("--batch-size", type=int, default=None)
+    update_parser.add_argument("--seed", type=int, default=None)
+    update_parser.add_argument(
+        "--device", choices=("auto", "cpu", "cuda"), default=None
+    )
     subcommands.add_parser("predict", help="print one predicted command")
     subcommands.add_parser(
         "stats", help="show training runs and suggestion counts"
@@ -220,6 +252,8 @@ def run(arguments: Sequence[str] | None = None) -> int:
             return train(options)
         if options.command == "setup":
             return setup(options)
+        if options.command == "update":
+            return update(options)
         if options.command == "predict":
             return predict()
         if options.command == "stats":

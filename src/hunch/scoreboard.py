@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from typing import Sequence
 
-from hunch.model import Example
+from hunch.model import Example, MAX_ORDER
 from hunch.state import StateError
 
 
@@ -54,3 +54,30 @@ def save_scoreboard(state_directory: Path, examples: Sequence[Example]) -> Path:
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def load_scoreboard(state_directory: Path) -> list[Example]:
+    path = state_directory / SCOREBOARD_FILENAME
+    if not path.is_file():
+        raise StateError(f"scoreboard does not exist: {path}; run 'hunch setup' first")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise StateError(f"scoreboard is unreadable: {path}: {error}") from error
+    if not isinstance(raw, list) or not raw:
+        raise StateError(f"scoreboard is unreadable: {path}: pairs required")
+    examples: list[Example] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise StateError(f"scoreboard is unreadable: {path}: pair required")
+        context = item.get("context")
+        target = item.get("next")
+        if (
+            not isinstance(context, list)
+            or len(context) != MAX_ORDER
+            or not all(isinstance(command, str) for command in context)
+            or not isinstance(target, str)
+        ):
+            raise StateError(f"scoreboard is unreadable: {path}: invalid pair")
+        examples.append(Example(tuple(context), target))
+    return examples

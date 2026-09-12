@@ -12,6 +12,7 @@ import pytest
 import torch
 
 from hunch.model import chronological_split
+from hunch.pile import CONSUMED_FILENAME
 from hunch.scoreboard import SCOREBOARD_FILENAME
 from hunch.state import STATE_FILENAME
 from hunch.stats import STATS_FILENAME
@@ -98,7 +99,12 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
         for path in (home / ".local" / "share" / "hunch").iterdir()
         if path.is_file()
     }
-    assert artifacts == {SCOREBOARD_FILENAME, STATE_FILENAME, STATS_FILENAME}
+    assert artifacts == {
+        CONSUMED_FILENAME,
+        SCOREBOARD_FILENAME,
+        STATE_FILENAME,
+        STATS_FILENAME,
+    }
     scoreboard = home / ".local" / "share" / "hunch" / SCOREBOARD_FILENAME
     stored_scoreboard = scoreboard.read_bytes()
     assert stat.S_IMODE(scoreboard.stat().st_mode) == 0o600

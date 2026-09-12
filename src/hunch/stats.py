@@ -95,12 +95,15 @@ def save_stats(state_directory: Path, stats: Stats) -> Path:
                 pass
 
 
-def render_stats(stats: Stats) -> str:
-    return (
+def render_stats(stats: Stats, last_update: str | None = None) -> str:
+    text = (
         f"training runs: {stats.training_runs}\n"
         f"suggestions displayed: {stats.suggestions_displayed}\n"
         f"suggestions inserted: {stats.suggestions_inserted}\n"
     )
+    if last_update:
+        return f"{text}last update: {last_update}\n"
+    return text
 
 
 def _from_mapping(raw: object, path: Path) -> Stats:

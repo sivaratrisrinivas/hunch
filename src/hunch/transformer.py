@@ -447,6 +447,60 @@ def train_transformer(
     return TrainingResult(model, config, device, best_epoch, best_validation_loss)
 
 
+UPDATE_STEPS = 32
+UPDATE_LEARNING_RATE = 3e-3
+
+
+def continue_transformer(
+    model: ByteDecoderTransformer,
+    old_examples: Sequence[Example],
+    new_examples: Sequence[Example],
+    config: TrainingConfig,
+    *,
+    steps: int = UPDATE_STEPS,
+) -> ByteDecoderTransformer:
+    if not old_examples or not new_examples:
+        raise ValueError("update examples must not be empty")
+    if type(steps) is not int or steps <= 0:
+        raise ValueError("steps must be a positive integer")
+    config.validate()
+    _seed_everything(config.seed)
+    device = next(model.parameters()).device
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=UPDATE_LEARNING_RATE,
+        weight_decay=config.weight_decay,
+    )
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(config.seed)
+    half = max(1, config.batch_size // 2)
+    model.train()
+    for _ in range(steps):
+        batch = [
+            *_sample_examples(old_examples, half, generator),
+            *_sample_examples(new_examples, half, generator),
+        ]
+        input_ids, labels = _tensor_batch(
+            batch, model.tokenizer, model.config.block_size, device
+        )
+        optimizer.zero_grad(set_to_none=True)
+        loss = model.loss(input_ids, labels)
+        loss.backward()  # type: ignore[no-untyped-call]
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+    model.eval()
+    return model
+
+
+def _sample_examples(
+    examples: Sequence[Example], count: int, generator: torch.Generator
+) -> list[Example]:
+    indexes = torch.randint(
+        0, len(examples), (count,), generator=generator
+    ).tolist()
+    return [examples[index] for index in indexes]
+
+
 def evaluate_transformer(
     model: ByteDecoderTransformer,
     examples: Sequence[Example],
