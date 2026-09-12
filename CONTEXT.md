@@ -35,3 +35,19 @@ _Avoid_: Init, bootstrap
 **Daily use**:
 A later terminal after first-run. A suggestion may appear with no further action.
 _Avoid_: Session, recurring use
+
+**Champion**:
+The transformer weights Daily use uses to produce a suggestion, until an Update keeps new ones.
+_Avoid_: Winner, production model, command-ngram
+
+**Pile**:
+The eight new usable commands that allow an Update to start.
+_Avoid_: Batch, buffer, window
+
+**Update**:
+A later fit that continues from the Champion when a Pile exists. History is not rewritten.
+_Avoid_: Fine-tune, retrain, online learning, realtime training
+
+**Scoreboard**:
+The command-context and next-command pairs held out at Setup. An Update is kept only if the transformer's exact-command accuracy on this set does not fall.
+_Avoid_: Holdout, test set, validation set

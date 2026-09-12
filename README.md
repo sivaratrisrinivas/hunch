@@ -12,7 +12,7 @@ The guess comes from a small language model you train on your own Bash history, 
 
 After setup, a new prompt can print one guess. `Ctrl-X Ctrl-P` copies it onto an empty line. You still press Enter to run it. You still ignore it if it is wrong.
 
-The trained model sits in `~/.local/share/hunch`. Closing the terminal does not delete it. Train again only when you want it to learn newer habits.
+The Champion and the Scoreboard sit in `~/.local/share/hunch`. Closing the terminal does not delete them. The guess you see is from that Champion, not from a count of past commands.
 
 Lines that look like passwords, tokens, or keys never go into training and never come back as a guess. Prefix a secret command with a space so Bash never saves it. That is stronger than Hunch's filter, which is a precaution, not a lock.
 
@@ -37,7 +37,7 @@ uv tool install .
 hunch setup
 ```
 
-`hunch setup` trains on your history on that GPU, then writes the hook. Training prints nothing until it finishes. Then it tells you how often the model guessed the exact next command.
+`hunch setup` trains on your history on that GPU, then writes the Champion, the Scoreboard, and the hook. Training prints nothing until it finishes. Then it tells you how often the model guessed the exact next command.
 
 Open a new terminal, or `source ~/.bash_aliases` and press Enter. A guess may print above the prompt. If later prompts stay quiet, `Ctrl-X Ctrl-P` still asks for one.
 
