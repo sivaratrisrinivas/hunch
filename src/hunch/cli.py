@@ -17,13 +17,14 @@ from hunch.model import (
     evaluate_model,
     examples_from_commands,
 )
-from hunch.shell import BASH_INTEGRATION
+from hunch.shell import BASH_INTEGRATION, install_hook
 from hunch.state import StateError, load_model, save_model
 from hunch.stats import increment_stat, load_stats, record_event, render_stats
 from hunch.transformer import (
     EvaluationMetrics,
     TrainingConfig,
     evaluate_transformer,
+    require_cuda_device,
     resolve_device,
     train_transformer,
 )
@@ -44,6 +45,20 @@ def state_directory() -> Path:
     data_home = os.environ.get("XDG_DATA_HOME")
     root = Path(data_home) if data_home else Path.home() / ".local" / "share"
     return root / "hunch"
+
+
+def setup(options: argparse.Namespace) -> int:
+    require_cuda_device()
+    options.device = "cuda"
+    trained = train(options)
+    if trained != 0:
+        return trained
+    install_hook(Path.home() / ".bash_aliases")
+    print(
+        "Next prompt can show the first suggestion. "
+        "Open a new terminal, or source ~/.bash_aliases and press Enter."
+    )
+    return 0
 
 
 def train(options: argparse.Namespace) -> int:
@@ -173,6 +188,15 @@ def parser() -> argparse.ArgumentParser:
     train_parser.add_argument(
         "--device", choices=("auto", "cpu", "cuda"), default=None
     )
+    setup_parser = subcommands.add_parser(
+        "setup", help="train on one local GPU and install the Bash hook"
+    )
+    setup_parser.add_argument(
+        "--tiny", action="store_true", help="use a small training profile"
+    )
+    setup_parser.add_argument("--epochs", type=int, default=None)
+    setup_parser.add_argument("--batch-size", type=int, default=None)
+    setup_parser.add_argument("--seed", type=int, default=None)
     subcommands.add_parser("predict", help="print one predicted command")
     subcommands.add_parser(
         "stats", help="show training runs and suggestion counts"
@@ -192,6 +216,8 @@ def run(arguments: Sequence[str] | None = None) -> int:
     try:
         if options.command == "train":
             return train(options)
+        if options.command == "setup":
+            return setup(options)
         if options.command == "predict":
             return predict()
         if options.command == "stats":

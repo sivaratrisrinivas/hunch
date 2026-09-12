@@ -381,6 +381,13 @@ def resolve_device(preference: DevicePreference) -> torch.device:
     return torch.device("cpu")
 
 
+def require_cuda_device() -> torch.device:
+    device = resolve_device("cuda")
+    if device.type != "cuda":
+        raise RuntimeError("setup needs one local GPU that PyTorch can use")
+    return device
+
+
 def train_transformer(
     train_examples: Sequence[Example],
     validation_examples: Sequence[Example],

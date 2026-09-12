@@ -136,8 +136,8 @@ def test_uv_tool_install_uses_an_isolated_command(installed_hunch: Path) -> None
     assert Path(prefix).resolve() != Path(sys.prefix).resolve()
     assert str(PROJECT_ROOT / "src") not in package
     assert package.endswith("site-packages/hunch/__init__.py")
-    assert torch_version.endswith("+cpu")
-    assert cuda_version == "None"
+    assert torch_version.endswith("+cu121")
+    assert cuda_version == "12.1"
 
 
 def test_installed_command_trains_predicts_and_keeps_state_private(

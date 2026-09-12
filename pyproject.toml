@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Predict the next Bash command from local command history"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.26,<3", "torch>=2.5,<3"]
+dependencies = ["numpy>=1.26,<3", "torch>=2.5.1,<2.6"]
 
 [project.scripts]
 hunch = "hunch.cli:main"
@@ -17,7 +17,15 @@ hunch = "hunch.cli:main"
 dev = ["mypy>=1.14", "pytest>=8.3"]
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
+torch = [
+    { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

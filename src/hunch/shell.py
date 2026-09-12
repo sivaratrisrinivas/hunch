@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+
+HOOK_ALIASES_LINE = 'eval "$("$HOME/.local/bin/hunch" shell-init)"'
+
+
+def install_hook(aliases: Path) -> None:
+    existing = aliases.read_text(encoding="utf-8") if aliases.is_file() else ""
+    if HOOK_ALIASES_LINE in existing:
+        return
+    aliases.parent.mkdir(parents=True, exist_ok=True)
+    prefix = existing if existing.endswith("\n") or existing == "" else f"{existing}\n"
+    aliases.write_text(f"{prefix}{HOOK_ALIASES_LINE}\n", encoding="utf-8")
+
+
 BASH_INTEGRATION = r"""# Hunch Bash integration. Inspect this output, then: eval "$(hunch shell-init)"
 
 _hunch_ms() {
