@@ -41,7 +41,7 @@ hunch setup
 
 Open a new terminal, or `source ~/.bash_aliases` and press Enter. A guess may print above the prompt. If later prompts stay quiet, `Ctrl-X Ctrl-P` still asks for one.
 
-After eight new usable commands, `hunch update` continues from the Champion and prints keep or discard. `hunch stats` shows the same line.
+After eight new usable commands, the hook starts `hunch update` in the background. That job continues from the Champion and keeps the new weights only if exact-command accuracy on the Scoreboard does not fall. `hunch stats` shows the last keep or discard.
 
 ```bash
 hunch predict
