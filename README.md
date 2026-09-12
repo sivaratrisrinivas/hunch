@@ -12,7 +12,7 @@ The guess comes from a small language model you train on your own Bash history, 
 
 After setup, a new prompt can print one guess. `Ctrl-X Ctrl-P` copies it onto an empty line. You still press Enter to run it. You still ignore it if it is wrong.
 
-The Champion and the Scoreboard sit in `~/.local/share/hunch`. Closing the terminal does not delete them. The guess you see is from that Champion, not from a count of past commands. After eight new usable commands, `hunch update` continues from that Champion. New weights stay only if exact-command accuracy on the Scoreboard does not fall.
+The Champion and the Scoreboard sit in `~/.local/share/hunch`. Closing the terminal does not delete them. The guess you see is from that Champion, not from a count of past commands. After eight new usable commands, the hook starts an Update from that Champion. New weights stay only if exact-command accuracy on the Scoreboard does not fall.
 
 Lines that look like passwords, tokens, or keys never go into training and never come back as a guess. Prefix a secret command with a space so Bash never saves it. That is stronger than Hunch's filter, which is a precaution, not a lock.
 
@@ -20,7 +20,7 @@ Lines that look like passwords, tokens, or keys never go into training and never
 
 If you have to go fetch a guess, you will type instead. Asking a hosted LLM at every prompt would be slower than that, and it would ship your history off the machine. A model trained on the internet also guesses generic Unix. Yours should guess you.
 
-First-run is three steps. More than that, and people stop before they see a suggestion. Setup trains and installs the hook. You do not edit a file by hand. The next prompt is the product.
+First-run is three steps. More than that, and people stop before they see a suggestion. Setup trains and installs the hook. You do not edit a file by hand. The next prompt is the product. An Update later is not another step. The hook starts it in the background when a Pile exists.
 
 `Ctrl-R` only finds a line you already typed. Counting the most common command has the same limit. It can only replay something it has seen whole. A language model writes the next command one character at a time, so it can assemble a line that never appeared as one piece. That only helps if the guess shows up before you start typing. Hunch leaves a half-typed line alone.
 
