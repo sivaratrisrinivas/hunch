@@ -9,15 +9,8 @@ from typing import Iterator, Literal, Sequence
 
 from hunch.exam import Exam, save_exam
 from hunch.history import HistoryError
-from hunch.model import (
-    Accuracy,
-    CountModel,
-    Example,
-    MAX_ORDER,
-    evaluate_model,
-    examples_from_commands,
-)
-from hunch.pile import PILE_SIZE, has_pile, load_consumed, save_consumed
+from hunch.model import Accuracy, CountModel, evaluate_model
+from hunch.pile import PILE_SIZE, UpdateExamples, load_consumed, save_consumed
 from hunch.scoreboard import load_scoreboard
 from hunch.state import STATE_FILENAME, StateError, load_model, save_model
 from hunch.transformer import (
@@ -89,10 +82,8 @@ def _apply_update(
     consumed = load_consumed(state_directory)
     if consumed is None:
         consumed = len(commands)
-    if not has_pile(commands, consumed):
-        raise HistoryError("no pile of eight new usable commands")
-
     scoreboard = load_scoreboard(state_directory)
+    batch = UpdateExamples.from_stream(commands, consumed, scoreboard)
     decision: Decision
     transformer: Accuracy | None
     if _transformer_should_wait(config):
@@ -100,9 +91,7 @@ def _apply_update(
         transformer = None
         exam = Exam.waited_out()
     else:
-        old_examples = examples_from_commands(commands[:consumed])
-        new_examples = _pile_examples(commands, consumed)
-        if not old_examples:
+        if not batch.old:
             raise HistoryError(
                 "no commands from before the Pile to mix into the Update"
             )
@@ -110,9 +99,7 @@ def _apply_update(
         device = resolve_device(config.device)
         champion = load_model(state_directory, device)
         before = exact_hits(champion, scoreboard)
-        candidate = continue_transformer(
-            champion, old_examples, new_examples, config
-        )
+        candidate = continue_transformer(champion, batch, config)
         after = exact_hits(candidate, scoreboard)
         decision = "keep" if sum(after) >= sum(before) else "discard"
         if decision == "keep":
@@ -132,13 +119,6 @@ def _apply_update(
 
 def _transformer_should_wait(config: TrainingConfig) -> bool:
     return config.device != "cpu" and resolve_device("cuda").type != "cuda"
-
-
-def _pile_examples(commands: Sequence[str], consumed: int) -> list[Example]:
-    return [
-        Example(tuple(commands[index - MAX_ORDER : index]), commands[index])
-        for index in range(consumed, consumed + PILE_SIZE)
-    ]
 
 
 def _append_update_log(state_directory: Path, record: str) -> None:

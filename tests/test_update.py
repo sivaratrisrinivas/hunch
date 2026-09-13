@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 import stat
 
-from hunch.model import Example
+from hunch.model import Example, chronological_split, examples_from_commands
+from hunch.pile import UpdateExamples
 from hunch.scoreboard import SCOREBOARD_FILENAME, save_scoreboard
 from hunch.state import STATE_FILENAME
 from hunch.stats import STATS_FILENAME
@@ -70,6 +71,24 @@ def test_update_without_a_pile_does_not_change_the_champion(tmp_path: Path) -> N
     )
 
 
+def test_update_examples_old_excludes_scoreboard_pairs() -> None:
+    setup = patterned_history()
+    split = chronological_split(setup)
+    pile = [f"new-{index}" for index in range(8)]
+    stream = [*setup, *pile]
+    consumed = len(setup)
+    leaked = frozenset(examples_from_commands(stream[:consumed])) & frozenset(
+        split.validation
+    )
+
+    batch = UpdateExamples.from_stream(stream, consumed, split.validation)
+
+    assert leaked
+    assert frozenset(batch.old).isdisjoint(frozenset(split.validation))
+    assert leaked.isdisjoint(batch.old)
+    assert len(batch.new) == 8
+
+
 def test_update_discards_when_scoreboard_accuracy_falls(tmp_path: Path) -> None:
     home = tmp_path / "home"
     old = [f"old-{index}" for index in range(12)] + list(CONTEXT)
@@ -84,6 +103,9 @@ def test_update_discards_when_scoreboard_accuracy_falls(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert champion.read_bytes() == original
+    assert json.loads(
+        (state_dir(home) / CONSUMED_FILENAME).read_text(encoding="utf-8")
+    ) == {"consumed": len(old) + 8}
     record = (state_dir(home) / UPDATE_LOG_FILENAME).read_text(encoding="utf-8")
     assert "discard" in record
     assert "command-ngram exact-command accuracy:" in record
@@ -112,6 +134,9 @@ def test_update_keeps_when_scoreboard_accuracy_does_not_fall(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stderr
     assert champion.read_bytes() != original
+    assert json.loads(
+        (state_dir(home) / CONSUMED_FILENAME).read_text(encoding="utf-8")
+    ) == {"consumed": len(old) + 8}
     record = (state_dir(home) / UPDATE_LOG_FILENAME).read_text(encoding="utf-8")
     assert "keep" in record
     assert "command-ngram exact-command accuracy:" in record

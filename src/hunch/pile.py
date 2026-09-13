@@ -1,16 +1,48 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import tempfile
 from typing import Sequence
 
+from hunch.history import HistoryError
+from hunch.model import Example, MAX_ORDER
 from hunch.state import StateError
 
 
 PILE_SIZE = 8
 CONSUMED_FILENAME = "consumed.json"
+
+
+@dataclass(frozen=True)
+class UpdateExamples:
+    old: tuple[Example, ...]
+    new: tuple[Example, ...]
+
+    @classmethod
+    def from_stream(
+        cls,
+        commands: Sequence[str],
+        consumed: int,
+        scoreboard: Sequence[Example],
+    ) -> UpdateExamples:
+        if not has_pile(commands, consumed):
+            raise HistoryError("no pile of eight new usable commands")
+        forbidden = frozenset(scoreboard)
+        old = []
+        for index in range(MAX_ORDER, consumed):
+            example = Example(
+                tuple(commands[index - MAX_ORDER : index]), commands[index]
+            )
+            if example not in forbidden:
+                old.append(example)
+        new = tuple(
+            Example(tuple(commands[index - MAX_ORDER : index]), commands[index])
+            for index in range(consumed, consumed + PILE_SIZE)
+        )
+        return cls(tuple(old), new)
 
 
 def has_pile(commands: Sequence[str], consumed: int | None) -> bool:
