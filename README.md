@@ -52,3 +52,58 @@ hunch stats
 ```
 
 Read the guess before you run it.
+
+## How data flows
+
+History never leaves this machine. Setup writes the Champion and the Scoreboard. Daily use reads those files. Update writes an Exam from the Scoreboard pass it already ran. Looking does not change the Champion.
+
+```mermaid
+flowchart TD
+  history["Bash history"] --> usable["usable commands"]
+  usable --> setup["hunch setup"]
+  setup --> champion["Champion"]
+  setup --> scoreboard["Scoreboard"]
+  setup --> hook["Bash hook"]
+  hook --> prompt["new prompt"]
+  prompt --> predict["hunch predict"]
+  champion --> predict
+  usable --> predict
+  predict --> suggestion["one Suggestion"]
+  prompt --> pile{"Pile of eight new commands?"}
+  pile -->|yes| update["hunch update"]
+  champion --> update
+  scoreboard --> update
+  update -->|"keep if accuracy does not fall"| champion
+  update --> exam["Exam"]
+  champion --> inspect["hunch inspect"]
+  usable --> inspect
+  exam --> reprint["hunch exam"]
+```
+
+```text
+prompt
+  maybe start Update
+  hunch predict          # last three usable commands
+    Champion.generate    # one Suggestion, or silence after 200ms
+  Ctrl-X Ctrl-P          # copy Suggestion onto an empty line
+
+hunch update
+  score Scoreboard with old Champion
+  continue from Champion on the Pile
+  score Scoreboard with candidate
+  keep or discard
+  write Exam of lost and gained pairs
+
+hunch inspect            # generate once, append a record
+hunch exam               # reprint last Exam, do not generate
+```
+
+```text
+src/hunch/
+├── history.py      # usable commands
+├── transformer.py  # train and generate
+├── update.py       # keep, discard, or wait
+├── exam.py         # last Exam
+├── inspect.py      # one Suggestion's insides
+└── shell.py        # prompt hook
+```
