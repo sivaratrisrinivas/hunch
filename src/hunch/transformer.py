@@ -5,13 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 import random
-from typing import Literal, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
 from hunch.model import Accuracy, Example
+
+if TYPE_CHECKING:
+    from hunch.pile import UpdateExamples
 
 
 BYTE_VOCAB_SIZE = 256
@@ -477,13 +480,12 @@ UPDATE_LEARNING_RATE = 3e-3
 
 def continue_transformer(
     model: ByteDecoderTransformer,
-    old_examples: Sequence[Example],
-    new_examples: Sequence[Example],
+    examples: UpdateExamples,
     config: TrainingConfig,
     *,
     steps: int = UPDATE_STEPS,
 ) -> ByteDecoderTransformer:
-    if not old_examples or not new_examples:
+    if not examples.old or not examples.new:
         raise ValueError("update examples must not be empty")
     if type(steps) is not int or steps <= 0:
         raise ValueError("steps must be a positive integer")
@@ -501,8 +503,8 @@ def continue_transformer(
     model.train()
     for _ in range(steps):
         batch = [
-            *_sample_examples(old_examples, half, generator),
-            *_sample_examples(new_examples, half, generator),
+            *_sample_examples(examples.old, half, generator),
+            *_sample_examples(examples.new, half, generator),
         ]
         input_ids, labels = _tensor_batch(
             batch, model.tokenizer, model.config.block_size, device

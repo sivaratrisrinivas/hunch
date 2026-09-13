@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from hunch.history import awk_count_usable
+
 
 HOOK_ALIASES_LINE = 'eval "$("$HOME/.local/bin/hunch" shell-init)"'
 
@@ -15,7 +17,14 @@ def install_hook(aliases: Path) -> None:
     aliases.write_text(f"{prefix}{HOOK_ALIASES_LINE}\n", encoding="utf-8")
 
 
-BASH_INTEGRATION = r"""# Hunch Bash integration. Inspect this output, then: eval "$(hunch shell-init)"
+def render_bash_integration() -> str:
+    program = awk_count_usable().rstrip("\n")
+    if "'" in program:
+        raise ValueError("awk program cannot contain single quotes")
+    return BASH_INTEGRATION_TEMPLATE.replace("__HUNCH_USABLE_AWK__", program)
+
+
+BASH_INTEGRATION_TEMPLATE = r"""# Hunch Bash integration. Inspect this output, then: eval "$(hunch shell-init)"
 
 _hunch_ms() {
   local t=${1:-0.0}
@@ -50,16 +59,7 @@ _hunch_pile_ready() {
   consumed=$(sed -n 's/.*"consumed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$dir/consumed.json")
   [[ $consumed =~ ^[0-9]+$ ]] || return 1
   usable=$(awk '
-    {
-      line = $0
-      sub(/\r$/, "", line)
-      gsub(/^[ \t]+|[ \t]+$/, "", line)
-      if (line == "" || line ~ /^#[0-9]+$/) next
-      lower = tolower(line)
-      if (lower ~ /(password|passwd|passphrase|token|secret|api[_-]?key|private[_-]?key|authorization:|bearer |begin .*private key|ssh .*-i )/) next
-      n++
-    }
-    END { print n + 0 }
+__HUNCH_USABLE_AWK__
   ' "$hist")
   ((usable - consumed >= 8))
 }

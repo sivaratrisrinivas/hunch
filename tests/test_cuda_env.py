@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from hunch.cuda_env import prepare_local_cuda_libraries
 
 
-def test_prepare_local_cuda_libraries_drops_windows_cuda_9(monkeypatch) -> None:
+def test_prepare_local_cuda_libraries_drops_windows_cuda_9(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv(
         "PATH",
         "/usr/bin:/mnt/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.0/bin:/bin",

@@ -21,7 +21,7 @@ from hunch.model import (
 )
 from hunch.pile import save_consumed
 from hunch.scoreboard import save_scoreboard
-from hunch.shell import BASH_INTEGRATION, install_hook
+from hunch.shell import install_hook, render_bash_integration
 from hunch.state import STATE_FILENAME, StateError, load_model, save_model
 from hunch.stats import increment_stat, load_stats, render_stats
 from hunch.transformer import (
@@ -173,7 +173,7 @@ def show_stats() -> int:
 
 
 def shell_init() -> int:
-    print(BASH_INTEGRATION, end="")
+    print(render_bash_integration(), end="")
     return 0
 
 

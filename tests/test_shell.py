@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 
+from hunch.shell import render_bash_integration
 from tests.scripted import install_scripted_checkpoint
 from tests.test_cli import patterned_history, run_hunch, write_history
 
@@ -150,6 +151,7 @@ def test_shell_init_emits_inspectable_bash_without_modifying_the_shell(
         check=False,
     )
     assert syntax.returncode == 0, syntax.stderr
+    assert emitted.stdout == render_bash_integration()
 
     probe = run_bash(
         home,
@@ -422,6 +424,54 @@ def test_eight_new_usable_commands_start_update_in_the_background(
     start = float(result.stdout.split("ELAPSED_START=", 1)[1].splitlines()[0])
     end = float(result.stdout.split("ELAPSED_END=", 1)[1].splitlines()[0])
     assert (end - start) < 30.0
+
+
+def test_echo_token_as_eighth_new_command_starts_update(tmp_path: Path) -> None:
+    home = pile_home(tmp_path, [*SEVEN_NEW, "echo token"])
+    log = tmp_path / "hunch-calls.log"
+    install_logged_hunch(tmp_path / "wrapper", log, hold_update_seconds=45)
+
+    result = run_bash(
+        home,
+        source_hunch(
+            'eval "$PROMPT_COMMAND" >prompt.out\n'
+            + wait_for_logged_update(log)
+            + stop_background_update()
+            + "printf 'SUGGESTION='\n"
+            + "cat prompt.out\n"
+        ),
+        path_prefix=tmp_path / "wrapper",
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"SUGGESTION={SUGGESTION}\n" in result.stdout
+    assert log.read_text(encoding="utf-8").splitlines().count("update") == 1
+
+
+def test_url_userinfo_padding_does_not_form_a_pile(tmp_path: Path) -> None:
+    home = pile_home(
+        tmp_path,
+        ["https://admin:hunter2@example.test/private"] * 8,
+    )
+    log = tmp_path / "hunch-calls.log"
+    install_logged_hunch(tmp_path / "wrapper", log, hold_update_seconds=2)
+
+    result = run_bash(
+        home,
+        source_hunch(
+            'eval "$PROMPT_COMMAND" >prompt.out\n'
+            "sleep 0.3\n"
+            "printf 'SUGGESTION='\n"
+            "cat prompt.out\n"
+        ),
+        path_prefix=tmp_path / "wrapper",
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"SUGGESTION={SUGGESTION}\n" in result.stdout
+    assert "update" not in log.read_text(encoding="utf-8").splitlines()
 
 
 def test_seven_new_commands_do_not_start_update(tmp_path: Path) -> None:
