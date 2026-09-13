@@ -7,6 +7,7 @@ import sys
 from typing import Sequence
 import unicodedata
 
+from hunch.exam import load_exam, render_exam
 from hunch.history import HistoryError, is_sensitive, read_usable_history
 from hunch.inspect import append_inspection, inspect_current, render_inspection
 from hunch.model import (
@@ -157,6 +158,11 @@ def inspect() -> int:
     return 0
 
 
+def exam() -> int:
+    print(render_exam(load_exam(state_directory())), end="")
+    return 0
+
+
 def show_stats() -> int:
     directory = state_directory()
     print(
@@ -251,6 +257,7 @@ def parser() -> argparse.ArgumentParser:
         "inspect",
         help="print one Suggestion and how the Champion produced it",
     )
+    subcommands.add_parser("exam", help="reprint the last Exam")
     subcommands.add_parser("stats", help="show training runs and the last Update")
     subcommands.add_parser(
         "shell-init", help="print Bash integration for prompt suggestions"
@@ -271,6 +278,8 @@ def run(arguments: Sequence[str] | None = None) -> int:
             return predict()
         if options.command == "inspect":
             return inspect()
+        if options.command == "exam":
+            return exam()
         if options.command == "stats":
             return show_stats()
         return shell_init()

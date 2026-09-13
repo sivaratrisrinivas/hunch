@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Iterator, Literal, Sequence
 
+from hunch.exam import Exam, save_exam
 from hunch.history import HistoryError
 from hunch.model import (
     Accuracy,
@@ -22,7 +23,7 @@ from hunch.state import STATE_FILENAME, StateError, load_model, save_model
 from hunch.transformer import (
     TrainingConfig,
     continue_transformer,
-    evaluate_transformer,
+    exact_hits,
     resolve_device,
 )
 
@@ -97,6 +98,7 @@ def _apply_update(
     if _transformer_should_wait(config):
         decision = "wait"
         transformer = None
+        exam = Exam.waited_out()
     else:
         old_examples = examples_from_commands(commands[:consumed])
         new_examples = _pile_examples(commands, consumed)
@@ -107,23 +109,16 @@ def _apply_update(
 
         device = resolve_device(config.device)
         champion = load_model(state_directory, device)
-        before = evaluate_transformer(
-            champion, scoreboard, batch_size=config.batch_size
-        )
+        before = exact_hits(champion, scoreboard)
         candidate = continue_transformer(
             champion, old_examples, new_examples, config
         )
-        after = evaluate_transformer(
-            candidate, scoreboard, batch_size=config.batch_size
-        )
-        decision = (
-            "keep"
-            if after.exact_accuracy.correct >= before.exact_accuracy.correct
-            else "discard"
-        )
+        after = exact_hits(candidate, scoreboard)
+        decision = "keep" if sum(after) >= sum(before) else "discard"
         if decision == "keep":
             save_model(candidate, state_directory)
-        transformer = after.exact_accuracy
+        transformer = Accuracy(sum(after), len(scoreboard))
+        exam = Exam.from_hits(scoreboard, before, after)
 
     ngram = evaluate_model(
         CountModel.train(commands[: consumed + PILE_SIZE]), scoreboard
@@ -131,6 +126,7 @@ def _apply_update(
     result = UpdateResult(decision, transformer, ngram)
     save_consumed(state_directory, consumed + PILE_SIZE)
     _append_update_log(state_directory, result.record)
+    save_exam(state_directory, exam)
     return result
 
 

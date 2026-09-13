@@ -525,29 +525,35 @@ def _sample_examples(
     return [examples[index] for index in indexes]
 
 
+def exact_hits(
+    model: ByteDecoderTransformer,
+    examples: Sequence[Example],
+) -> tuple[bool, ...]:
+    if not examples:
+        raise ValueError("evaluation examples must not be empty")
+    was_training = model.training
+    model.eval()
+    try:
+        return tuple(
+            model.generate(example.context) == example.target
+            for example in examples
+        )
+    finally:
+        if was_training:
+            model.train()
+
+
 def evaluate_transformer(
     model: ByteDecoderTransformer,
     examples: Sequence[Example],
     *,
     batch_size: int = 32,
 ) -> EvaluationMetrics:
-    if not examples:
-        raise ValueError("evaluation examples must not be empty")
-    was_training = model.training
-    model.eval()
-    try:
-        correct = 0
-        for example in examples:
-            prediction = model.generate(example.context)
-            if prediction == example.target:
-                correct += 1
-        return EvaluationMetrics(
-            exact_accuracy=Accuracy(correct, len(examples)),
-            bits_per_byte=bits_per_byte(model, examples, batch_size=batch_size),
-        )
-    finally:
-        if was_training:
-            model.train()
+    hits = exact_hits(model, examples)
+    return EvaluationMetrics(
+        exact_accuracy=Accuracy(sum(hits), len(examples)),
+        bits_per_byte=bits_per_byte(model, examples, batch_size=batch_size),
+    )
 
 
 def bits_per_byte(
