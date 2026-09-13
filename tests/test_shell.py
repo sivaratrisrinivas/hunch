@@ -140,6 +140,8 @@ def test_shell_init_emits_inspectable_bash_without_modifying_the_shell(
     assert emitted.stderr == ""
     assert "PROMPT_COMMAND" in emitted.stdout
     assert r"\C-x\C-p" in emitted.stdout
+    assert "hunch inspect" not in emitted.stdout
+    assert "hunch exam" not in emitted.stdout
     syntax = subprocess.run(
         ["bash", "--norc", "--noprofile", "-n"],
         input=emitted.stdout,
@@ -321,7 +323,7 @@ def test_slow_prediction_disables_automatic_and_keeps_on_demand(
     assert commands.count("predict") == 2
 
 
-def test_stats_report_only_aggregate_counts_and_store_no_command_text(
+def test_stats_report_training_runs_and_store_no_command_text(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
@@ -343,38 +345,20 @@ def test_stats_report_only_aggregate_counts_and_store_no_command_text(
     displayed = run_hunch(display_home, "stats")
 
     assert before.returncode == 0, before.stderr
-    assert before.stdout == (
-        "training runs: 0\n"
-        "suggestions displayed: 0\n"
-        "suggestions inserted: 0\n"
-    )
+    assert before.stdout == "training runs: 0\n"
     assert trained.returncode == 0, trained.stderr
     assert after_train.returncode == 0, after_train.stderr
-    assert after_train.stdout == (
-        "training runs: 1\n"
-        "suggestions displayed: 0\n"
-        "suggestions inserted: 0\n"
-    )
+    assert after_train.stdout == "training runs: 1\n"
     assert used.returncode == 0, used.stderr
     assert displayed.returncode == 0, displayed.stderr
-    assert displayed.stdout == (
-        "training runs: 0\n"
-        "suggestions displayed: 1\n"
-        "suggestions inserted: 1\n"
-    )
+    assert displayed.stdout == "training runs: 0\n"
+    assert not (display_home / STATS_PATH).exists()
 
-    payload = json.loads((display_home / STATS_PATH).read_text(encoding="utf-8"))
-    assert payload == {
-        "training_runs": 0,
-        "suggestions_displayed": 1,
-        "suggestions_inserted": 1,
-    }
-    stored = (display_home / STATS_PATH).read_text(encoding="utf-8")
-    assert CONTEXT[0] not in stored
-    assert CONTEXT[1] not in stored
-    assert CONTEXT[2] not in stored
-    assert SUGGESTION not in stored
-    assert stat.S_IMODE((display_home / STATS_PATH).stat().st_mode) == 0o600
+    stored = (home / STATS_PATH).read_text(encoding="utf-8")
+    assert json.loads(stored) == {"training_runs": 1}
+    assert "git status" not in stored
+    assert "git push" not in stored
+    assert stat.S_IMODE((home / STATS_PATH).stat().st_mode) == 0o600
 
 
 def test_prompt_flushes_history_so_a_pile_can_form(tmp_path: Path) -> None:

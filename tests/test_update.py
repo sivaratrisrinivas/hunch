@@ -66,8 +66,6 @@ def test_update_without_a_pile_does_not_change_the_champion(tmp_path: Path) -> N
     assert counted.returncode == 0, counted.stderr
     assert counted.stdout == (
         "training runs: 1\n"
-        "suggestions displayed: 0\n"
-        "suggestions inserted: 0\n"
     )
 
 
@@ -94,8 +92,6 @@ def test_update_discards_when_scoreboard_accuracy_falls(tmp_path: Path) -> None:
     assert "command-ngram exact-command accuracy:" in counted.stdout
     assert counted.stdout.startswith(
         "training runs: 0\n"
-        "suggestions displayed: 0\n"
-        "suggestions inserted: 0\n"
     )
     write_history(home, list(CONTEXT))
     predicted = run_hunch(home, "predict")

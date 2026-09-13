@@ -20,11 +20,11 @@ Lines that look like passwords, tokens, or keys never go into training and never
 
 If you have to go fetch a guess, you will type instead. Asking a hosted LLM at every prompt would be slower than that, and it would ship your history off the machine. A model trained on the internet also guesses generic Unix. Yours should guess you.
 
-First-run is three steps. More than that, and people stop before they see a suggestion. Setup trains and installs the hook. You do not edit a file by hand. The next prompt is the product. An Update later is not another step. The hook starts it in the background when a Pile exists.
+First-run is three steps. More than that, and people stop before they see a suggestion. Setup trains and installs the hook. You do not edit a file by hand. The next prompt can show a suggestion. An Update later is not another step. The hook starts it in the background when a Pile exists.
 
 `Ctrl-R` only finds a line you already typed. Counting the most common command has the same limit. It can only replay something it has seen whole. A language model writes the next command one character at a time, so it can assemble a line that never appeared as one piece. That only helps if the guess shows up before you start typing. Hunch leaves a half-typed line alone.
 
-Your history stays on the machine. Setup writes a Scoreboard of held-out command-context and next-command pairs into the state directory. That file is command text on purpose, so trimming `~/.bash_history` later does not change it. An Update is kept only if the transformer's exact-command accuracy on that set does not fall. `hunch stats` still shows the three integer counters, and after an Update it also shows the last keep, discard, or that the transformer waited, with the command-ngram number beside it. That number is a baseline. It is never the guess.
+Your history stays on the machine. Setup writes a Scoreboard of held-out command-context and next-command pairs into the state directory. That file is command text on purpose, so trimming `~/.bash_history` later does not change it. An Update is kept only if the transformer's exact-command accuracy on that set does not fall. `hunch stats` shows how many times you trained, and after an Update the last keep, discard, or that the transformer waited, with the command-ngram number beside it. That number is a baseline. It is never the guess. `hunch inspect` prints the Suggestion Daily use would have shown, the command-ngram guess, the first-byte top 8, and bits per byte. Looking does not change the Champion.
 
 On a laptop CPU, one guess can take more than 200 milliseconds. Waiting that long for every prompt is worse than no guess, so Hunch stops guessing and waits for `Ctrl-X Ctrl-P`. Open a new shell and it tries again. First-run itself does not use the CPU. If this machine has no GPU that PyTorch can use, setup stops and says so.
 
@@ -45,6 +45,7 @@ After eight new usable commands, the hook starts `hunch update` in the backgroun
 
 ```bash
 hunch predict
+hunch inspect
 hunch update
 hunch stats
 ```

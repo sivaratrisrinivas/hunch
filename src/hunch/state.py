@@ -74,7 +74,7 @@ def load_model(
     destination = state_directory / STATE_FILENAME
     if not destination.is_file():
         raise StateError(
-            f"model state does not exist: {destination}; run 'hunch train' first"
+            f"model state does not exist: {destination}; run 'hunch setup' first"
         )
     model = _read_checkpoint(destination)
     target = device or torch.device("cpu")

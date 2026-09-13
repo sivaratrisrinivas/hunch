@@ -8,6 +8,7 @@ from typing import Sequence
 import unicodedata
 
 from hunch.history import HistoryError, is_sensitive, read_usable_history
+from hunch.inspect import append_inspection, inspect_current, render_inspection
 from hunch.model import (
     Accuracy,
     CountModel,
@@ -21,7 +22,7 @@ from hunch.pile import save_consumed
 from hunch.scoreboard import save_scoreboard
 from hunch.shell import BASH_INTEGRATION, install_hook
 from hunch.state import STATE_FILENAME, StateError, load_model, save_model
-from hunch.stats import increment_stat, load_stats, record_event, render_stats
+from hunch.stats import increment_stat, load_stats, render_stats
 from hunch.transformer import (
     EvaluationMetrics,
     TrainingConfig,
@@ -137,17 +138,31 @@ def predict() -> int:
     return 0
 
 
+def inspect() -> int:
+    prepared = read_usable_history(history_path())
+    if len(prepared.commands) < MAX_ORDER:
+        raise HistoryError(
+            f"history is too small: need at least {MAX_ORDER} usable commands to inspect"
+        )
+    destination = state_directory()
+    if not (destination / STATE_FILENAME).is_file():
+        raise StateError("no Champion; run 'hunch setup' first")
+    model = load_model(destination, resolve_device("auto"))
+    suggestion = model.generate(prepared.commands[-MAX_ORDER:])
+    if suggestion is None or not _valid_suggestion(suggestion):
+        return 0
+    inspection = inspect_current(model, prepared.commands, suggestion)
+    print(render_inspection(inspection), end="")
+    append_inspection(destination, inspection)
+    return 0
+
+
 def show_stats() -> int:
     directory = state_directory()
     print(
         render_stats(load_stats(directory), last_update_record(directory)),
         end="",
     )
-    return 0
-
-
-def record(event: str) -> int:
-    record_event(state_directory(), event)
     return 0
 
 
@@ -233,15 +248,13 @@ def parser() -> argparse.ArgumentParser:
     )
     subcommands.add_parser("predict", help="print one predicted command")
     subcommands.add_parser(
-        "stats", help="show training runs and suggestion counts"
+        "inspect",
+        help="print one Suggestion and how the Champion produced it",
     )
+    subcommands.add_parser("stats", help="show training runs and the last Update")
     subcommands.add_parser(
         "shell-init", help="print Bash integration for prompt suggestions"
     )
-    record_parser = subcommands.add_parser(
-        "record", help="record a displayed or inserted suggestion"
-    )
-    record_parser.add_argument("event", choices=("displayed", "inserted"))
     return command_parser
 
 
@@ -256,11 +269,11 @@ def run(arguments: Sequence[str] | None = None) -> int:
             return update(options)
         if options.command == "predict":
             return predict()
+        if options.command == "inspect":
+            return inspect()
         if options.command == "stats":
             return show_stats()
-        if options.command == "shell-init":
-            return shell_init()
-        return record(options.event)
+        return shell_init()
     except (HistoryError, StateError, OSError, RuntimeError, ValueError) as error:
         print(f"hunch: error: {error}", file=sys.stderr)
         return 2

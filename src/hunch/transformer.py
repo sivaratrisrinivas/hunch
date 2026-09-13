@@ -366,6 +366,30 @@ class ByteDecoderTransformer(nn.Module):
             if was_training:
                 self.train()
 
+    @torch.no_grad()
+    def first_byte_top(
+        self, context: Sequence[str], *, k: int = 8
+    ) -> list[tuple[int, float]]:
+        if type(k) is not int or k <= 0:
+            raise ValueError("k must be a positive integer")
+        was_training = self.training
+        self.eval()
+        try:
+            tokens = self.tokenizer.serialize_context(context)
+            window = tokens[-self.config.block_size :]
+            input_ids = torch.tensor(
+                [window], dtype=torch.long, device=next(self.parameters()).device
+            )
+            probabilities = torch.softmax(self(input_ids)[0, -1], dim=-1)
+            values, indices = torch.topk(probabilities[:BYTE_VOCAB_SIZE], k)
+            return [
+                (int(index.item()), float(value.item()))
+                for index, value in zip(indices, values)
+            ]
+        finally:
+            if was_training:
+                self.train()
+
 
 def resolve_device(preference: DevicePreference) -> torch.device:
     if preference == "cpu":
@@ -509,7 +533,6 @@ def evaluate_transformer(
 ) -> EvaluationMetrics:
     if not examples:
         raise ValueError("evaluation examples must not be empty")
-    device = next(model.parameters()).device
     was_training = model.training
     model.eval()
     try:
@@ -518,15 +541,33 @@ def evaluate_transformer(
             prediction = model.generate(example.context)
             if prediction == example.target:
                 correct += 1
+        return EvaluationMetrics(
+            exact_accuracy=Accuracy(correct, len(examples)),
+            bits_per_byte=bits_per_byte(model, examples, batch_size=batch_size),
+        )
+    finally:
+        if was_training:
+            model.train()
+
+
+def bits_per_byte(
+    model: ByteDecoderTransformer,
+    examples: Sequence[Example],
+    *,
+    batch_size: int = 32,
+) -> float:
+    if not examples:
+        raise ValueError("evaluation examples must not be empty")
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+    try:
         total_byte_nll, target_byte_count = _byte_loss_totals(
             model, examples, batch_size=batch_size, device=device
         )
         if target_byte_count == 0:
             raise ValueError("evaluation has no target bytes")
-        return EvaluationMetrics(
-            exact_accuracy=Accuracy(correct, len(examples)),
-            bits_per_byte=total_byte_nll / (target_byte_count * math.log(2)),
-        )
+        return total_byte_nll / (target_byte_count * math.log(2))
     finally:
         if was_training:
             model.train()

@@ -10,25 +10,15 @@ from hunch.state import StateError
 
 
 STATS_FILENAME = "stats.json"
-_FIELDS = ("training_runs", "suggestions_displayed", "suggestions_inserted")
-_RECORDABLE = {
-    "displayed": "suggestions_displayed",
-    "inserted": "suggestions_inserted",
-}
+_FIELDS = ("training_runs",)
 
 
 @dataclass(frozen=True)
 class Stats:
     training_runs: int = 0
-    suggestions_displayed: int = 0
-    suggestions_inserted: int = 0
 
     def as_dict(self) -> dict[str, int]:
-        return {
-            "training_runs": self.training_runs,
-            "suggestions_displayed": self.suggestions_displayed,
-            "suggestions_inserted": self.suggestions_inserted,
-        }
+        return {"training_runs": self.training_runs}
 
 
 def load_stats(state_directory: Path) -> Stats:
@@ -50,14 +40,6 @@ def increment_stat(state_directory: Path, field: str) -> Stats:
     updated = Stats(**values)
     save_stats(state_directory, updated)
     return updated
-
-
-def record_event(state_directory: Path, event: str) -> Stats:
-    try:
-        field = _RECORDABLE[event]
-    except KeyError as error:
-        raise ValueError(f"unknown record event: {event}") from error
-    return increment_stat(state_directory, field)
 
 
 def save_stats(state_directory: Path, stats: Stats) -> Path:
@@ -96,11 +78,7 @@ def save_stats(state_directory: Path, stats: Stats) -> Path:
 
 
 def render_stats(stats: Stats, last_update: str | None = None) -> str:
-    text = (
-        f"training runs: {stats.training_runs}\n"
-        f"suggestions displayed: {stats.suggestions_displayed}\n"
-        f"suggestions inserted: {stats.suggestions_inserted}\n"
-    )
+    text = f"training runs: {stats.training_runs}\n"
     if last_update:
         return f"{text}last update: {last_update}\n"
     return text

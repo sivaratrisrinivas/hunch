@@ -1,6 +1,6 @@
 # Hunch
 
-Hunch predicts the next shell command for one user from that user's recent command history.
+Hunch predicts the next shell command for one user from that user's recent command history, so that user can watch one transformer learn.
 
 ## Language
 
@@ -33,7 +33,7 @@ The first-run action that trains on the user's history and installs the hook so 
 _Avoid_: Init, bootstrap
 
 **Daily use**:
-A later terminal after first-run. A suggestion may appear with no further action.
+A later terminal after first-run. A suggestion may appear with no further action. Daily use is not Inspection.
 _Avoid_: Session, recurring use
 
 **Champion**:
@@ -51,3 +51,11 @@ _Avoid_: Fine-tune, retrain, online learning, realtime training
 **Scoreboard**:
 The command-context and next-command pairs held out at Setup. An Update is kept only if the transformer's exact-command accuracy on this set does not fall.
 _Avoid_: Holdout, test set, validation set
+
+**Inspection**:
+An on-demand look at how the Champion produced a Suggestion from the current command context. Inspection does not accept the Suggestion and does not change the Champion.
+_Avoid_: Explanation, debug, dashboard
+
+**Exam**:
+The Champion's lost and gained Scoreboard pairs recorded at an Update.
+_Avoid_: Test, quiz, report

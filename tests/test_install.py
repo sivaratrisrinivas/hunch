@@ -201,8 +201,6 @@ def test_installed_command_trains_predicts_and_keeps_state_private(
     assert counted.returncode == 0, counted.stderr
     assert counted.stdout == (
         "training runs: 1\n"
-        "suggestions displayed: 0\n"
-        "suggestions inserted: 0\n"
     )
     stored = stats.read_text(encoding="utf-8")
     assert PERSONAL_CANARY not in stored
@@ -238,8 +236,6 @@ def test_aliases_startup_line_displays_inserts_and_falls_back(
     assert result.stdout.splitlines()[0] == SUGGESTION
     assert f"LINE={SUGGESTION}" in result.stdout
     assert "training runs: 0" in result.stdout
-    assert "suggestions displayed: 1" in result.stdout
-    assert "suggestions inserted: 1" in result.stdout
     assert PERSONAL_CANARY not in result.stdout
     assert PERSONAL_CANARY not in result.stderr
 

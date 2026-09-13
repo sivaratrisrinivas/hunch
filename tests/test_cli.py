@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+from typing import TypedDict
 
 import pytest
 import torch
@@ -118,8 +119,6 @@ def test_train_and_predict_through_process_boundary(tmp_path: Path) -> None:
     assert counted.returncode == 0, counted.stderr
     assert counted.stdout == (
         "training runs: 1\n"
-        "suggestions displayed: 0\n"
-        "suggestions inserted: 0\n"
     )
 
     write_history(home, [*commands, "git status", "git add .", "git commit"])
@@ -333,6 +332,114 @@ def test_predict_failure_is_clear_and_prints_no_suggestion(tmp_path: Path) -> No
     assert HISTORY_MARKER not in result.stdout
 
 
+def test_inspect_prints_suggestion_insides_and_appends_a_record(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    context = ("alpha", "beta", "gamma")
+    suggestion = "scripted"
+    ngram_guess = "ngram-next"
+    write_history(home, [*context, ngram_guess, *context])
+    champion = install_scripted_checkpoint(home, context, suggestion.encode())
+    original = champion.read_bytes()
+
+    predicted = run_hunch(home, "predict")
+    inspected = run_hunch(home, "inspect")
+    again = run_hunch(home, "inspect")
+    counted = run_hunch(home, "stats")
+
+    assert predicted.returncode == 0, predicted.stderr
+    assert predicted.stdout == f"{suggestion}\n"
+    assert inspected.returncode == 0, inspected.stderr
+    assert inspected.stderr == ""
+    assert again.returncode == 0, again.stderr
+    parsed = _parse_inspect_stdout(inspected.stdout)
+    assert parsed["suggestion"] == suggestion
+    assert parsed["command_ngram"] == ngram_guess
+    assert len(parsed["first_bytes"]) == 8
+    token, probability = parsed["first_bytes"][0]
+    assert token == suggestion[0]
+    assert 0.0 < probability <= 1.0
+    assert parsed["bits_per_byte"] >= 0.0
+    records = _inspection_records(home)
+    assert len(records) == 2
+    assert records[0]["context"] == list(context)
+    assert records[0]["suggestion"] == suggestion
+    assert records[0]["command_ngram"] == ngram_guess
+    assert len(records[0]["first_bytes"]) == 8
+    assert records[0]["first_bytes"][0]["byte"] == suggestion[0]
+    assert records[0]["bits_per_byte"] == pytest.approx(
+        parsed["bits_per_byte"], abs=5e-4
+    )
+    assert champion.read_bytes() == original
+    assert counted.returncode == 0, counted.stderr
+    assert suggestion not in counted.stdout
+    assert ngram_guess not in counted.stdout
+    assert "alpha" not in counted.stdout
+    record_path = _inspection_record_path(home)
+    assert record_path is not None
+    assert stat.S_IMODE(record_path.stat().st_mode) == 0o600
+    stored = record_path.read_text(encoding="utf-8")
+    assert suggestion in stored
+    stats_path = home / ".local" / "share" / "hunch" / STATS_FILENAME
+    if stats_path.is_file():
+        assert suggestion not in stats_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("continuation", "emit_boundary"),
+    [
+        (b"", True),
+        (b"echo a\necho b", True),
+        (b"API_KEY=xyz", True),
+    ],
+    ids=["blank", "invalid", "sensitive"],
+)
+def test_inspect_discards_unusable_suggestions_without_a_record(
+    tmp_path: Path, continuation: bytes, emit_boundary: bool
+) -> None:
+    home = tmp_path / "home"
+    context = ("one", "two", "three")
+    write_history(home, list(context))
+    install_scripted_checkpoint(
+        home, context, continuation, emit_boundary=emit_boundary
+    )
+
+    inspected = run_hunch(home, "inspect")
+
+    assert inspected.returncode == 0, inspected.stderr
+    assert inspected.stderr == ""
+    assert inspected.stdout == ""
+    assert _inspection_records(home) == []
+
+
+def test_inspect_failure_is_clear_and_prints_no_suggestion(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    write_history(missing, [HISTORY_MARKER, *patterned_history()])
+    missing_result = run_hunch(missing, "inspect")
+
+    short = tmp_path / "short"
+    write_history(short, [HISTORY_MARKER, "one"])
+    install_scripted_checkpoint(short, ("one", "two", "three"), b"nope")
+    short_result = run_hunch(short, "inspect")
+    short_champion = (short / ".local" / "share" / "hunch" / STATE_FILENAME).read_bytes()
+
+    assert missing_result.returncode != 0
+    assert missing_result.stdout == ""
+    assert "champion" in missing_result.stderr.lower()
+    assert "setup" in missing_result.stderr.lower()
+    assert HISTORY_MARKER not in missing_result.stderr
+    assert HISTORY_MARKER not in missing_result.stdout
+    assert _inspection_records(missing) == []
+
+    assert short_result.returncode != 0
+    assert short_result.stdout == ""
+    assert "too small" in short_result.stderr
+    assert HISTORY_MARKER not in short_result.stderr
+    assert (short / ".local" / "share" / "hunch" / STATE_FILENAME).read_bytes() == (
+        short_champion
+    )
+    assert _inspection_records(short) == []
+
+
 def test_predict_rejects_incompatible_and_unreadable_checkpoints(
     tmp_path: Path,
 ) -> None:
@@ -361,6 +468,59 @@ def test_predict_rejects_incompatible_and_unreadable_checkpoints(
     assert "model state is unreadable" in unreadable.stderr
     assert HISTORY_MARKER not in unreadable.stderr
     assert checkpoint.read_bytes() == garbage
+
+
+class ParsedInspect(TypedDict):
+    suggestion: str
+    command_ngram: str
+    first_bytes: list[tuple[str, float]]
+    bits_per_byte: float
+
+
+class InspectRecord(TypedDict):
+    context: list[str]
+    suggestion: str
+    command_ngram: str
+    first_bytes: list[dict[str, float | str]]
+    bits_per_byte: float
+
+
+def _parse_inspect_stdout(stdout: str) -> ParsedInspect:
+    lines = stdout.splitlines()
+    assert len(lines) == 11
+    assert lines[1].startswith("command-ngram: ")
+    first_bytes: list[tuple[str, float]] = []
+    for line in lines[2:10]:
+        token, raw_probability = line.rsplit(" ", 1)
+        first_bytes.append((token, float(raw_probability)))
+    assert lines[10].startswith("bits per byte: ")
+    return {
+        "suggestion": lines[0],
+        "command_ngram": lines[1].removeprefix("command-ngram: "),
+        "first_bytes": first_bytes,
+        "bits_per_byte": float(lines[10].removeprefix("bits per byte: ")),
+    }
+
+
+def _inspection_record_path(home: Path) -> Path | None:
+    directory = home / ".local" / "share" / "hunch"
+    if not directory.is_dir():
+        return None
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and path.suffix == ".jsonl":
+            return path
+    return None
+
+
+def _inspection_records(home: Path) -> list[InspectRecord]:
+    path = _inspection_record_path(home)
+    if path is None:
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def holdout_pairs(commands: list[str]) -> list[dict[str, object]]:

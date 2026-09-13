@@ -101,7 +101,6 @@ _hunch_prompt() {
   _hunch_predict
   if [[ -n "${_HUNCH_SUGGESTION}" ]]; then
     printf '%s\n' "${_HUNCH_SUGGESTION}"
-    hunch record displayed >/dev/null 2>&1 || true
   fi
   return 0
 }
@@ -118,7 +117,6 @@ _hunch_insert() {
   fi
   READLINE_LINE="${_HUNCH_SUGGESTION}"
   READLINE_POINT=${#READLINE_LINE}
-  hunch record inserted >/dev/null 2>&1 || true
   return 0
 }
 
